@@ -177,3 +177,33 @@ def parse_boundary_wkt(value: str) -> Tuple[Optional[BaseGeometry], bool, str]:
 
 def geom_as_geojson(geom: BaseGeometry) -> dict:
     return mapping(geom)
+
+
+def _kml_ring(ring) -> str:
+    return " ".join(f"{x},{y},0" for x, y in ring.coords)
+
+
+def _kml_polygon(poly) -> str:
+    outer = _kml_ring(poly.exterior)
+    inner = "".join(
+        f"<innerBoundaryIs><LinearRing><coordinates>{_kml_ring(r)}"
+        f"</coordinates></LinearRing></innerBoundaryIs>"
+        for r in poly.interiors
+    )
+    return (
+        f"<Polygon><outerBoundaryIs><LinearRing><coordinates>{outer}"
+        f"</coordinates></LinearRing></outerBoundaryIs>{inner}</Polygon>"
+    )
+
+
+def geometry_to_kml(geom4326: BaseGeometry, name: str = "boundary") -> str:
+    """Serialize a WGS84 Polygon/MultiPolygon to a KML (XML) document string."""
+    if geom4326.geom_type == "MultiPolygon":
+        body = "<MultiGeometry>" + "".join(_kml_polygon(p) for p in geom4326.geoms) + "</MultiGeometry>"
+    else:
+        body = _kml_polygon(geom4326)
+    return (
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        '<kml xmlns="http://www.opengis.net/kml/2.2"><Document><Placemark>'
+        f"<name>{name}</name>{body}</Placemark></Document></kml>"
+    )

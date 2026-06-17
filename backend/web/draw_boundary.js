@@ -27,10 +27,21 @@
   var center = hasPoint ? [lat, lng] : [42.9, -75.5]; // fallback: central NY
   var map = L.map("map").setView(center, hasPoint ? 17 : 7);
 
-  L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+  // Base layers: satellite (best for tracing fields) + streets, with a toggle.
+  var satellite = L.tileLayer(
+    "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+    { maxZoom: 21, maxNativeZoom: 19, attribution: "Imagery &copy; Esri, Maxar, Earthstar Geographics" }
+  );
+  var streets = L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
     maxZoom: 19,
     attribution: "&copy; OpenStreetMap contributors",
-  }).addTo(map);
+  });
+  satellite.addTo(map); // default to satellite
+  L.control.layers(
+    { "Satellite": satellite, "Streets": streets },
+    null,
+    { collapsed: false }
+  ).addTo(map);
 
   if (hasPoint) {
     L.marker(center).addTo(map).bindPopup("Reported problem location").openPopup();
@@ -50,6 +61,7 @@
   map.addControl(drawControl);
 
   var saveBtn = document.getElementById("save");
+  var downloadBtn = document.getElementById("download");
   var clearBtn = document.getElementById("clear");
   var areaEl = document.getElementById("area");
   var statusEl = document.getElementById("status");
@@ -66,8 +78,38 @@
     var has = drawn.getLayers().length > 0;
     areaEl.innerHTML = "Area: <b>" + (has ? total.toFixed(2) : "—") + " acres</b>";
     saveBtn.disabled = !has;
+    downloadBtn.disabled = !has;
     clearBtn.disabled = !has;
   }
+
+  // Build a KML (XML) Polygon string from a drawn Leaflet layer.
+  function layerToKml(layer, name) {
+    var ring = layer.getLatLngs()[0].slice();
+    if (ring.length && (ring[0].lat !== ring[ring.length - 1].lat || ring[0].lng !== ring[ring.length - 1].lng)) {
+      ring.push(ring[0]); // close the ring
+    }
+    var coords = ring.map(function (p) { return p.lng + "," + p.lat + ",0"; }).join(" ");
+    return '<?xml version="1.0" encoding="UTF-8"?>\n' +
+      '<kml xmlns="http://www.opengis.net/kml/2.2"><Document><Placemark><name>' +
+      (name || "boundary") + '</name><Polygon><outerBoundaryIs><LinearRing><coordinates>' +
+      coords + '</coordinates></LinearRing></outerBoundaryIs></Polygon></Placemark></Document></kml>';
+  }
+
+  downloadBtn.addEventListener("click", function () {
+    var layers = drawn.getLayers();
+    if (!layers.length) { showStatus("Draw a polygon first.", "error"); return; }
+    var kml = layerToKml(layers[0], leadId || "boundary");
+    var blob = new Blob([kml], { type: "application/vnd.google-earth.kml+xml" });
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement("a");
+    a.href = url;
+    a.download = (leadId || "boundary") + ".kml";
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    showStatus("KML downloaded.", "success");
+  });
 
   // Keep a single polygon: clear previous when a new one is drawn.
   map.on(L.Draw.Event.CREATED, function (e) {

@@ -20,6 +20,7 @@ from typing import Any, Dict, Optional
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import Response
 from fastapi.staticfiles import StaticFiles
 
 from app import boundary as boundary_mod
@@ -190,6 +191,28 @@ def process_lead(lead: LeadProcessRequest) -> Dict[str, Any]:
 def process_sample() -> Dict[str, Any]:
     payload = json.loads(SAMPLE_PAYLOAD.read_text(encoding="utf-8"))
     return _process(payload)
+
+
+@app.get("/boundary/{lead_id}.kml")
+def boundary_kml(lead_id: str) -> Response:
+    """Export a saved boundary as KML (XML). Source order: local cache -> PostGIS
+    -> Field_Boundaries sheet (via AppSheet API). Opens in Google Earth/QGIS/ArcGIS."""
+    settings = get_settings()
+    geom, _, _ = boundary_mod.load_stored_geometry(lead_id, _store)
+    if geom is None:
+        geom, _, _ = boundary_mod.load_database_geometry(lead_id, settings)
+    if geom is None:
+        geom, _, _ = boundary_mod.find_boundary_via_appsheet(lead_id, settings)
+    if geom is None:
+        return Response(
+            content=f'<?xml version="1.0" encoding="UTF-8"?>\n<error>No boundary found for {lead_id}</error>',
+            media_type="application/xml", status_code=404,
+        )
+    return Response(
+        content=geo.geometry_to_kml(geom, lead_id),
+        media_type="application/vnd.google-earth.kml+xml",
+        headers={"Content-Disposition": f'attachment; filename="{lead_id}.kml"'},
+    )
 
 
 # Static web (Leaflet draw page). Mounted last so API routes take precedence.

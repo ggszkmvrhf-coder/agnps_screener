@@ -274,6 +274,54 @@ def _save_boundary_to_postgis(record: Dict[str, Any], settings: Settings) -> boo
         return False
 
 
+def find_boundary_via_appsheet(lead_id: str, settings: Settings):
+    """Read a boundary back from the Field_Boundaries table via the AppSheet API.
+
+    This is the durable source when there's no PostGIS and the backend's local
+    JSON cache has been wiped (e.g. Render free-tier restart). Returns
+    (geom4326, source, record) or (None, None, None).
+    """
+    if not lead_id or not (settings.appsheet_app_id and settings.appsheet_api_key):
+        return None, None, None
+    rows = _appsheet_find(
+        settings, "Field_Boundaries",
+        f'Filter(Field_Boundaries, [LeadID] = "{lead_id}")',
+    )
+    for row in rows:
+        gj = row.get("BoundaryGeoJSON")
+        if not gj:
+            continue
+        geom, valid, _ = geo.validate_geojson_polygon(gj)
+        if valid:
+            return geom, row.get("BoundarySource", "Sales drawn boundary"), row
+    return None, None, None
+
+
+def _appsheet_find(settings: Settings, table: str, selector: str) -> list:
+    """Run an AppSheet API 'Find' action and return the matching rows."""
+    import urllib.error
+    import urllib.request
+
+    host = "api.eu.appsheet.com" if settings.appsheet_region == "eu" else "api.appsheet.com"
+    url = f"https://{host}/api/v2/apps/{settings.appsheet_app_id}/tables/{table}/Action"
+    body = json.dumps({
+        "Action": "Find",
+        "Properties": {"Selector": selector},
+        "Rows": [],
+    }).encode("utf-8")
+    request = urllib.request.Request(
+        url, data=body,
+        headers={"ApplicationAccessKey": settings.appsheet_api_key, "Content-Type": "application/json"},
+    )
+    try:
+        raw = urllib.request.urlopen(request, timeout=12).read()
+        data = json.loads(raw or b"[]")
+        return data.get("Rows", []) if isinstance(data, dict) else (data or [])
+    except Exception as exc:
+        logger.warning("AppSheet Find failed: %s", exc)
+        return []
+
+
 def _maybe_push_to_appsheet(record: Dict[str, Any], settings: Settings) -> bool:
     """Optional immediate update of AppSheet. Returns True if all pushes worked."""
     if not (settings.appsheet_app_id and settings.appsheet_api_key):
