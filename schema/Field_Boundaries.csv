@@ -1,0 +1,2 @@
+BoundaryID,LeadID,CreatedAt,BoundarySource,BoundaryGeoJSON,BoundaryWKT,BoundaryAreaAcres,BoundaryCentroidLat,BoundaryCentroidLng,BoundaryConfidence,GeometryValid,GeometryWarning,Notes
+BND-0001,LEAD-0001,2026-06-17 09:20:00,Sales drawn boundary,"{""type"":""Polygon"",""coordinates"":[[[-76.656,42.700],[-76.653,42.700],[-76.653,42.702],[-76.656,42.702],[-76.656,42.700]]]}","POLYGON((-76.656 42.700,-76.653 42.700,-76.653 42.702,-76.656 42.702,-76.656 42.700))",18.4,42.701,-76.6545,Medium,TRUE,,Rough field outline drawn by rep

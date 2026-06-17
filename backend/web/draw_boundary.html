@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
+  <title>Draw Field Boundary</title>
+
+  <!-- Leaflet (map) -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <!-- Leaflet.draw (polygon drawing + editing) -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.css" />
+  <link rel="stylesheet" href="draw_boundary.css" />
+</head>
+<body>
+  <header id="bar">
+    <div id="title">Draw Field / Problem Boundary</div>
+    <div id="lead">Lead: <span id="lead-id">—</span></div>
+  </header>
+
+  <div id="map"></div>
+
+  <div id="panel">
+    <div id="hint">Tap the polygon tool (top-left), trace the field, then <b>Save</b>.</div>
+    <div id="area">Area: <b>— acres</b></div>
+    <div id="actions">
+      <button id="save" disabled>Save boundary</button>
+      <button id="clear" disabled>Clear</button>
+    </div>
+    <div id="status" class="hidden"></div>
+    <div id="disclaimer">
+      Internal screening tool. A rough boundary is fine — SWCD review is required.
+    </div>
+  </div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.js"></script>
+  <script src="draw_boundary.js"></script>
+</body>
+</html>

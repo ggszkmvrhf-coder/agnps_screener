@@ -1,0 +1,5 @@
+StatusID,LeadID,Status,ChangedAt,ChangedBy,Note
+STATUS-0001,LEAD-0001,New,2026-06-17 09:14:00,rep@example.com,Lead submitted from field
+STATUS-0002,LEAD-0001,Boundary Drawn,2026-06-17 09:20:00,rep@example.com,Boundary drawn on web map (18.4 acres)
+STATUS-0003,LEAD-0001,Processing,2026-06-17 09:21:00,system,Sent to GIS backend
+STATUS-0004,LEAD-0001,Report Ready,2026-06-17 09:21:30,system,Auto-facts, BMP candidates, and calculations written

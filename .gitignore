@@ -1,0 +1,10 @@
+.venv/
+__pycache__/
+*.pyc
+.env
+backend/boundary_store.json
+# Don't commit downloaded GIS data, but keep the empty folder structure.
+data/raw/**
+data/processed/**
+data/logs/**
+!**/.gitkeep

@@ -1,0 +1,33 @@
+:root { --brand: #1f4e5f; --ok: #1b7f3b; --err: #b00020; }
+
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; font-family: Arial, Helvetica, sans-serif; }
+
+#bar {
+  background: var(--brand); color: #fff; padding: 10px 14px;
+  display: flex; justify-content: space-between; align-items: center;
+}
+#title { font-weight: bold; font-size: 16px; }
+#lead { font-size: 13px; opacity: 0.9; }
+
+#map { height: 58vh; width: 100%; }
+
+#panel { padding: 12px 14px; }
+#hint { font-size: 14px; color: #333; margin-bottom: 8px; }
+#area { font-size: 18px; margin: 6px 0 12px; }
+
+#actions { display: flex; gap: 10px; }
+button {
+  flex: 1; padding: 14px; font-size: 16px; border: none; border-radius: 8px;
+  color: #fff; background: var(--brand); cursor: pointer;
+}
+button:disabled { background: #9bb0b7; cursor: not-allowed; }
+#clear { background: #666; }
+
+#status { margin-top: 12px; padding: 10px; border-radius: 8px; font-size: 14px; }
+#status.info { background: #eef4f6; color: #234; }
+#status.success { background: #e7f6ec; color: var(--ok); }
+#status.error { background: #fdecef; color: var(--err); }
+.hidden { display: none; }
+
+#disclaimer { margin-top: 12px; font-size: 12px; color: #777; }

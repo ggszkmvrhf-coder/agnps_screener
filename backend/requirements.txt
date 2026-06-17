@@ -1,0 +1,20 @@
+# --- Web API ---
+fastapi>=0.110
+uvicorn[standard]>=0.27
+pydantic>=2.6
+pydantic-settings>=2.1
+python-dotenv>=1.0
+
+# --- Database / PostGIS ---
+SQLAlchemy>=2.0
+GeoAlchemy2>=0.14
+psycopg2-binary>=2.9          # swap for asyncpg if you go async
+
+# --- GIS / geometry ---
+geopandas>=0.14
+shapely>=2.0
+pyproj>=3.6
+pyogrio>=0.7                  # fast vector IO (Fiona is an alternative)
+fiona>=1.9                    # optional fallback driver for read_file
+rasterio>=1.3
+numpy>=1.26

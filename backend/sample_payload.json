@@ -1,0 +1,17 @@
+{
+  "LeadID": "LEAD-0001",
+  "CustomerName": "Maple Hollow Dairy",
+  "FarmName": "Maple Hollow Dairy",
+  "FieldName": "North Flat by the creek",
+  "ProblemType": "Ditch or stream erosion",
+  "ProblemDescription": "Field ditch is downcutting after heavy rain and dumping sediment toward the creek at the field edge.",
+  "GPSLatitude": 42.7012,
+  "GPSLongitude": -76.6543,
+  "BoundaryGeoJSON": null,
+  "BoundaryWKT": null,
+  "County": "Tompkins",
+  "Photos": ["photo_outlet_01.jpg", "photo_ditch_02.jpg"],
+  "Notes": "Farmer wants help before next spring melt.",
+  "PermissionToShareWithSWCD": true,
+  "FarmerInterestedInCostShare": "Yes"
+}

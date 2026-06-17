@@ -1,0 +1,4 @@
+BMPCandidateID,LeadID,BMPName,BMPCategory,ReasonSuggested,Confidence,NeedsHumanReview,Notes
+LEAD-0001-bmp-1,LEAD-0001,Outlet Stabilization,Outlet Stabilization,ProblemType 'Ditch or stream erosion' (waterbody ~420 ft away),High,TRUE,
+LEAD-0001-bmp-2,LEAD-0001,Grassed Waterway,Grassed Waterway,ProblemType 'Ditch or stream erosion' (waterbody ~420 ft away),High,TRUE,
+LEAD-0001-bmp-3,LEAD-0001,Underground Outlet,Underground Outlet,ProblemType 'Ditch or stream erosion' (waterbody ~420 ft away),High,TRUE,

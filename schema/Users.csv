@@ -1,0 +1,3 @@
+UserEmail,UserName,Role,Region,Active
+rep@example.com,Jordan Rep,SalesRep,Central NY,TRUE
+manager@example.com,Sam Manager,Manager,Statewide,TRUE

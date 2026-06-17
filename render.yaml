@@ -1,0 +1,17 @@
+# Render Blueprint. On Render: New + -> Blueprint -> pick this repo, and it
+# auto-configures the service (no need to find the "Root Directory" field).
+services:
+  - type: web
+    name: agnps-backend
+    runtime: python
+    plan: free
+    rootDir: backend                 # <-- this is the "Root Directory = backend"
+    buildCommand: pip install -r requirements-web.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.12"
+      # Optional: require a key on /save-boundary and /process-lead.
+      # Leave unset so the public Draw Boundary page works without a key.
+      # - key: API_KEY
+      #   sync: false
