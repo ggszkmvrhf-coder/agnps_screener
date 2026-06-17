@@ -16,15 +16,15 @@ APPSHEET_SETUP.md) **and** by limiting each view’s included columns.
 
 ### 2. My Leads — Deck (or Table)
 - Table: **Leads**, filtered by the **My Leads** slice (`[SalesRepEmail] = USEREMAIL()`).
-- Primary header: **CustomerName**.
-- Secondary header: **FieldName**.
+- Primary header: **LeadDisplayName** (see APPSHEET_LEAD_DISPLAY_NAME.md).
+- Secondary header: **ProblemType**.
 - Summary columns: **ProblemType**, **Status**, **CandidateScore**.
 
 ### 3. Lead Detail — Detail
 - Table: **Leads**, View type: **Detail**.
 - Show useful result fields; **CandidateScore / CandidateClass / GISConfidence**
   appear only once populated (their Show_If = `ISNOTBLANK(...)`).
-- Put the **Draw Boundary** action prominently (and optional **Submit for Processing**).
+- Put the **Draw Boundary** and **Submit for Processing** actions prominently.
 - Suggested grouping: Lead info → Location & boundary (Draw Boundary, BoundaryStatus,
   BoundaryAreaAcres) → Screening result (score/class/confidence/NextAction) →
   Estimates (cost-share outputs, shown after processing) → Auto facts / BMPs (inline refs).

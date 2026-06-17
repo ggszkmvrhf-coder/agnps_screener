@@ -94,6 +94,9 @@ def _resolve_boundary(lead: Dict[str, Any], warnings):
             return g, lead.get("BoundarySource") or "Uploaded boundary", None
         if w:
             warnings.append(w)
+    g, source, record = boundary_mod.load_database_geometry(lead.get("LeadID", ""), get_settings())
+    if g is not None:
+        return g, source, (record or {}).get("BoundaryAreaAcres")
     g, source, record = boundary_mod.load_stored_geometry(lead.get("LeadID", ""), _store)
     if g is not None:
         return g, source, (record or {}).get("BoundaryAreaAcres")
@@ -165,6 +168,7 @@ def health() -> Dict[str, Any]:
         "version": app.version,
         "database_configured": settings.database_url is not None,
         "database_reachable": reachable,
+        "public_gis_lookups_enabled": settings.public_gis_lookups_enabled,
         "api_key_required": settings.api_key is not None,
         "projected_crs": settings.projected_crs,
         "dem_configured": settings.dem_tiles_dir is not None,

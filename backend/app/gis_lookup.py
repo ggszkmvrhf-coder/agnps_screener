@@ -22,6 +22,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from shapely.geometry import mapping
 from shapely.geometry.base import BaseGeometry
 
+from . import public_gis
 from .database import fetch_all, table_exists
 from .settings import FT_PER_M, Settings
 
@@ -386,7 +387,15 @@ def run_lookups(
     analysis_wkt = analysis_geom.wkt
 
     if engine is None:
-        warnings.append("Database not configured/unreachable; vector GIS lookups skipped.")
+        if settings.public_gis_lookups_enabled:
+            warnings.append("PostGIS not configured; using live public GIS APIs.")
+            facts.update(
+                public_gis.run_live_public_lookups(
+                    locate_geom, analysis_geom, settings, warnings
+                )
+            )
+        else:
+            warnings.append("Database not configured/unreachable; vector GIS lookups skipped.")
     else:
         facts.update(lookup_county_town(engine, locate_wkt, settings, warnings))
         facts.update(lookup_huc(engine, locate_wkt, settings, warnings))

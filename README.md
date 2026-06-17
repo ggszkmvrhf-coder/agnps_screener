@@ -20,7 +20,8 @@ AppSheet (mobile intake)  →  Google Sheets (storage)  →  Apps Script (bridge
 * **Apps Script** = forwards new leads to the backend, writes results back.
 * **Python / FastAPI** = all GIS work (county/town, HUC, waterbody, WI/PWL, DAC,
   soil, slope), transparent BMP rules, and an internal candidate score.
-* **PostGIS** (preferred) or **GeoPackage**-loaded layers store NY GIS data.
+* **Live public GIS APIs** = the cheap v1 default when no database is set.
+* **PostGIS** = optional later for faster hosted layer lookups.
 
 See [docs/GIS_LOOKUP_PLAN.md](docs/GIS_LOOKUP_PLAN.md) for why the split is this way.
 
@@ -64,8 +65,8 @@ copy config.example.env .env
 # edit .env: set DATABASE_URL and/or DEM_TILES_DIR. Both are optional.
 ```
 
-The backend **runs with no database**. Without one, every vector lookup is
-skipped with a clear warning — useful for first-run smoke testing.
+The backend **runs with no database**. Without one, it calls live public GIS
+APIs for HUC, WI/PWL, DAC, Census county/town, and USDA soil lookups.
 
 ### 3. Run the FastAPI backend
 

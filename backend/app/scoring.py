@@ -119,14 +119,14 @@ def _classify(score: int) -> str:
 
 
 def _gis_confidence(facts: Dict[str, Any], engine_present: bool) -> str:
-    if not engine_present:
-        return "Low"
     core = [
         facts.get("CountyAuto"), facts.get("HUC12"), facts.get("NearestWaterbodyName"),
         facts.get("DominantHydrologicSoilGroup") or facts.get("DominantSoilDrainageClass"),
         facts.get("MeanSlopePercent"),
     ]
     present = sum(1 for v in core if v not in (None, ""))
+    if not engine_present and present == 0:
+        return "Low"
     return "High" if present >= 4 else "Medium" if present >= 2 else "Low"
 
 

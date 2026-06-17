@@ -1,16 +1,18 @@
-# Slim requirements for deploying the web + boundary endpoints (Render/Cloud Run).
-# Enough to run main.py, serve draw_boundary.html, and handle /save-boundary
-# (GeoJSON validation + acreage). It deliberately OMITS the heavy GIS stack
-# (geopandas, rasterio, GDAL, psycopg2) so the build is fast and reliable.
+# Slim requirements for deploying the web + processing endpoints (Render/Cloud Run).
+# Enough to run main.py, serve draw_boundary.html, handle /save-boundary, and
+# process leads through live public GIS APIs. It deliberately OMITS the heavy GIS
+# loading stack (geopandas, rasterio, GDAL) so the build is fast and reliable.
 #
-# /process-lead still runs in "no database / no layers" mode and returns clean
-# warnings. To enable full GIS lookups later, deploy with requirements.txt
-# instead (and add a PostGIS DATABASE_URL) -- that build needs system GDAL.
+# /process-lead can run PostGIS vector lookups when DATABASE_URL is set and
+# layers are loaded. It omits heavy data-loading packages like GeoPandas,
+# Fiona, pyogrio, and rasterio. Run data-loading scripts from your PC with
+# requirements.txt, not inside the Render web service.
 fastapi>=0.110
 uvicorn[standard]>=0.27
 pydantic>=2.6
 pydantic-settings>=2.1
 python-dotenv>=1.0
 SQLAlchemy>=2.0
+psycopg2-binary>=2.9
 shapely>=2.0
 pyproj>=3.6

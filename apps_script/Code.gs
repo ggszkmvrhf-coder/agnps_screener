@@ -1,10 +1,10 @@
 /**
  * AgNPS Candidate Lead Screener — Apps Script glue (v0.2).
  *
- * Scans Leads that are new or have a freshly drawn boundary, sends each to the
- * Python backend /process-lead, and writes the returned Auto_Facts, BMP
- * candidates, and Calculations back into the Google Sheet. Sheets is the system
- * of record; this script is the bridge to the GIS backend.
+ * Scans Leads submitted for processing, sends each to the Python backend
+ * /process-lead, and writes the returned Auto_Facts, BMP candidates, and
+ * Calculations back into the Google Sheet. Sheets is the system of record; this
+ * script is the bridge to the GIS backend.
  *
  * SETUP:
  *   1. Extensions > Apps Script from the Google Sheet behind your AppSheet app.
@@ -61,11 +61,13 @@ function processLeads() {
     const leadId = get_(row, col, 'LeadID');
     if (!leadId) continue;
 
-    const isNew = status === CONFIG.statusValues.new;
+    const explicitlySubmitted = status === CONFIG.statusValues.processing;
     const boundaryReady = boundaryStatus === CONFIG.boundaryDrawn && status !== CONFIG.statusValues.ready;
-    if (!isNew && !boundaryReady) continue;
+    if (!explicitlySubmitted && !boundaryReady) continue;
 
-    setCell_(leadsSheet, rowNumber, col, 'Status', CONFIG.statusValues.processing);
+    if (!explicitlySubmitted) {
+      setCell_(leadsSheet, rowNumber, col, 'Status', CONFIG.statusValues.processing);
+    }
 
     try {
       const payload = buildPayload_(row, col, boundaries[leadId]);
@@ -141,6 +143,8 @@ function writeResult_(ss, leadsSheet, rowNumber, col, leadId, result) {
   setCell_(leadsSheet, rowNumber, col, 'CandidateClass', result.CandidateClass);
   setCell_(leadsSheet, rowNumber, col, 'GISConfidence', result.GISConfidence);
   setCell_(leadsSheet, rowNumber, col, 'NextAction', result.NextAction);
+  setCell_(leadsSheet, rowNumber, col, 'BoundaryStatus', result.BoundaryStatus);
+  setCell_(leadsSheet, rowNumber, col, 'BoundarySource', result.BoundarySource);
   setCell_(leadsSheet, rowNumber, col, 'BoundaryAreaAcres', result.BoundaryAreaAcres);
   setCell_(leadsSheet, rowNumber, col, 'EstimatedProjectCost', calc.EstimatedProjectCost);
   setCell_(leadsSheet, rowNumber, col, 'EstimatedCostShareLow', calc.EstimatedCostShareLow);

@@ -1,67 +1,81 @@
-# Draw Boundary setup
+# Draw Boundary Setup
 
-A simple external web map (Leaflet) lets a sales rep trace a rough field /
-problem boundary. AppSheet does **not** do the polygon drawing — it just opens
-this page with the lead's GPS in the URL.
+A simple external web map lets a sales rep trace a rough field or problem
+boundary. AppSheet opens this page; the backend validates and saves the polygon.
 
-## Files (`backend/web/`)
-- `draw_boundary.html` — page shell, loads Leaflet + Leaflet.draw from CDN.
-- `draw_boundary.js` — map, polygon draw/edit, acreage, save.
-- `draw_boundary.css` — mobile-friendly styling.
+## Files
 
-Dependencies are CDN-loaded (no build step):
-- Leaflet 1.9.4, Leaflet.draw 1.0.4 (from unpkg).
-- Acreage uses `L.GeometryUtil.geodesicArea` (ships with Leaflet.draw).
+- `backend/web/draw_boundary.html`: page shell, Leaflet, and Leaflet.draw.
+- `backend/web/draw_boundary.js`: map, polygon draw/edit, acreage, save.
+- `backend/web/draw_boundary.css`: mobile-friendly styling.
 
-## How it’s served
-The backend serves the page as static files (mounted at `/`). With the backend
-running, open: `http://localhost:8000/draw_boundary.html`.
+Dependencies are loaded from CDNs, so there is no frontend build step.
 
-## URL parameters
+## How It Is Served
+
+The backend serves the page as static files. With the backend running, open:
+
+```text
+http://localhost:8000/draw_boundary.html
 ```
+
+## URL Parameters
+
+```text
 draw_boundary.html?lead_id=LEAD-0001&lat=42.7012&lng=-76.6543[&backend_url=...][&key=...]
 ```
-- `lead_id` (required) — Lead key the boundary saves against.
-- `lat`, `lng` (optional) — center + marker. Falls back to central NY if absent.
-- `backend_url` (optional) — backend origin; defaults to where the page is served.
-- `key` (optional) — API key, sent as `X-API-Key` (only if backend `API_KEY` set).
 
-## Rep flow
-1. In AppSheet, tap **Draw Boundary** (shown when ProblemLocation is set).
-2. Map opens centered on the GPS point (marker shown).
-3. Tap the polygon tool (top-left), trace the field, double-tap/▢ to finish.
-4. Area in acres updates; edit vertices if needed.
-5. Tap **Save boundary** → posts GeoJSON to `POST /save-boundary`.
-6. Success message shows the saved acreage.
+- `lead_id` is required and must match the `Leads[LeadID]` key.
+- `lat` and `lng` center the map and show the starting marker.
+- `backend_url` is optional; it defaults to the same origin as the page.
+- `key` is optional; it is sent as `X-API-Key` when backend `API_KEY` is set.
 
-Only one polygon is kept — drawing a new one replaces the previous.
+## Rep Flow
 
-## What the backend does on save (`POST /save-boundary`)
-1. Validates the GeoJSON polygon (auto-repairs minor self-intersections).
-2. Reprojects to the equal-area CRS (EPSG:5070) and computes **acres**.
-3. Computes the **centroid**.
-4. Caches the boundary in `boundary_store.json` keyed by `LeadID`.
-5. Returns `{ success, LeadID, BoundaryAreaAcres, BoundaryCentroidLat/Lng, message }`.
+1. In AppSheet, tap **Draw Boundary**.
+2. The map opens centered on the lead's GPS point.
+3. Tap the polygon tool, trace the field, and finish the shape.
+4. Edit vertices if needed.
+5. Tap **Save boundary**.
+6. The page posts GeoJSON to `POST /save-boundary`.
+7. The success message shows the saved acreage.
 
-## How AppSheet learns the boundary was saved
-The browser can’t write to your Sheet directly. Two options:
+Only one polygon is kept for the lead; drawing a new one replaces the previous
+rough boundary.
 
-- **Default (simple):** the next Apps Script cycle calls `/process-lead`; the
-  backend pulls the cached boundary, returns acreage + `BoundaryStatus = Drawn`,
-  and Apps Script writes those into the Sheet. Set the lead’s `BoundaryStatus`
-  to `Drawn` (a quick action or the rep) so it’s picked up promptly.
-- **Optional (instant):** set `APPSHEET_APP_ID` + `APPSHEET_API_KEY` in the
-  backend `.env`; `/save-boundary` then pushes `BoundaryStatus`/acreage straight
-  into AppSheet via the AppSheet API.
+## What The Backend Saves
 
-## Hosting notes
-- The page must be reachable from the rep’s phone. For local dev, expose the
-  backend with a tunnel (e.g. `ngrok http 8000`) and use that as the domain in
-  `BoundaryDrawURL`.
-- Because the page and `/save-boundary` are same-origin when served by the
-  backend, no CORS config is needed; CORS is open in v1 anyway for flexibility.
+`POST /save-boundary`:
 
-## Keep it simple
-This is a rough-boundary tool for screening. Precise digitizing is the office’s
-job (BoundaryStatus → `Office Digitized`). A loose trace is fine and SWCD review
-is always required.
+1. Validates the GeoJSON polygon.
+2. Repairs minor topology issues when possible.
+3. Reprojects to EPSG:5070 and computes acres.
+4. Computes the centroid.
+5. Caches the boundary in `boundary_store.json`.
+6. If AppSheet API settings are present, updates `Leads`.
+7. If AppSheet API settings are present, upserts `Field_Boundaries` with:
+   `BoundaryGeoJSON`, `BoundaryWKT`, centroid, acreage, confidence, and validity.
+
+## Recommended Render Setup
+
+Set these backend environment variables:
+
+```text
+APPSHEET_APP_ID=your-app-id
+APPSHEET_API_KEY=your-application-access-key
+APPSHEET_REGION=www
+```
+
+That makes AppSheet/Google Sheets the durable boundary store. This matters on
+Render because normal service filesystem changes can disappear after restarts
+or redeploys.
+
+## Local Fallback
+
+If AppSheet API credentials are not set, the backend uses `boundary_store.json`.
+That is fine for local testing, but not durable enough for real Render use.
+
+## Keep It Simple
+
+This is a rough-boundary tool for screening. Precise digitizing is an office or
+SWCD review task. A loose trace is fine, and human review is always required.

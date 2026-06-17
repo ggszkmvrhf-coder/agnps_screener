@@ -26,6 +26,12 @@ class Settings(BaseSettings):
     # ------------------------------------------------------------------ DB ---
     database_url: Optional[str] = None
 
+    # ----------------------------------------------------- live public GIS ---
+    # If DATABASE_URL is empty, /process-lead can still enrich leads by calling
+    # USGS/NYSDEC/NY Open Data/Census/USDA public services at processing time.
+    public_gis_lookups_enabled: bool = True
+    public_api_timeout_sec: float = 12.0
+
     # ------------------------------------------------------- API security ---
     # If set, /save-boundary and /process-lead require this key
     # (header X-API-Key, or ?key= for the browser draw page).

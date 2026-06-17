@@ -50,7 +50,7 @@ which fields the New Lead form shows.
 
 - [ ] 14. Add the **Draw Boundary** action (see APPSHEET_ACTIONS.md): External → website,
       Target `[BoundaryDrawURL]`, only if `ISNOTBLANK([ProblemLocation])`.
-- [ ] 15. (Optional) Add **Submit for Processing** action.
+- [ ] 15. Add **Submit for Processing** action.
 
 ## D. Test
 

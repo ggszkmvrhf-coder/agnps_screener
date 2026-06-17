@@ -8,10 +8,19 @@ services:
     rootDir: backend                 # <-- this is the "Root Directory = backend"
     buildCommand: pip install -r requirements-web.txt
     startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
     envVars:
       - key: PYTHON_VERSION
         value: "3.12"
+      - key: PUBLIC_GIS_LOOKUPS_ENABLED
+        value: "true"
       # Optional: require a key on /save-boundary and /process-lead.
-      # Leave unset so the public Draw Boundary page works without a key.
-      # - key: API_KEY
-      #   sync: false
+      - key: API_KEY
+        sync: false
+      # AppSheet API push keeps drawn boundaries durable without PostGIS.
+      - key: APPSHEET_APP_ID
+        sync: false
+      - key: APPSHEET_API_KEY
+        sync: false
+      - key: APPSHEET_REGION
+        value: www
