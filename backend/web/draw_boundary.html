@@ -20,7 +20,17 @@
   <div id="map"></div>
 
   <div id="panel">
-    <div id="hint">Tap the polygon tool (top-left), trace the field, then <b>Save</b>.</div>
+    <div id="hint">
+      Trace the field with the <b>polygon</b> tool (this feeds the score), then <b>Save</b>.
+      Use the <b>line</b> tool to mark points of interest — those export with the .kml but don't affect the score.
+    </div>
+    <div id="colors">
+      <span>Line color:</span>
+      <button class="swatch sel" data-color="#e6194b" style="background:#e6194b" title="Red"></button>
+      <button class="swatch" data-color="#ffe119" style="background:#ffe119" title="Yellow"></button>
+      <button class="swatch" data-color="#4363d8" style="background:#4363d8" title="Blue"></button>
+      <button class="swatch" data-color="#3cb44b" style="background:#3cb44b" title="Green"></button>
+    </div>
     <div id="area">Area: <b>— acres</b></div>
     <div id="actions">
       <button id="save" disabled>Save boundary</button>

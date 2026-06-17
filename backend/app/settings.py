@@ -37,6 +37,13 @@ class Settings(BaseSettings):
     # (header X-API-Key, or ?key= for the browser draw page).
     api_key: Optional[str] = None
 
+    # ----------------------------------------------- shareable boundary link ---
+    # Public base URL of this backend, used to build absolute boundary share
+    # links for emails. Override with PUBLIC_BASE_URL if the domain changes.
+    public_base_url: str = "https://agnps-backend.onrender.com"
+    # Signed boundary KML links expire after this many hours (then the link dies).
+    share_link_ttl_hours: int = 24
+
     # ---------------------------------------------------------- web / files ---
     web_dir: str = str(BACKEND_DIR / "web")
     # Backend-side cache that bridges /save-boundary (browser) and /process-lead

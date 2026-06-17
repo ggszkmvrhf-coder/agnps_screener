@@ -124,6 +124,7 @@ class LeadProcessResponse(BaseModel):
     BoundaryStatus: Optional[str] = None
     BoundarySource: Optional[str] = None
     BoundaryAreaAcres: Optional[float] = None
+    BoundaryShareURL: Optional[str] = None
     NextAction: Optional[str] = None
     ProcessingError: Optional[str] = None
 

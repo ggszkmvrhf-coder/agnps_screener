@@ -146,6 +146,7 @@ function writeResult_(ss, leadsSheet, rowNumber, col, leadId, result) {
   setCell_(leadsSheet, rowNumber, col, 'BoundaryStatus', result.BoundaryStatus);
   setCell_(leadsSheet, rowNumber, col, 'BoundarySource', result.BoundarySource);
   setCell_(leadsSheet, rowNumber, col, 'BoundaryAreaAcres', result.BoundaryAreaAcres);
+  setCell_(leadsSheet, rowNumber, col, 'BoundaryShareURL', result.BoundaryShareURL);
   setCell_(leadsSheet, rowNumber, col, 'EstimatedProjectCost', calc.EstimatedProjectCost);
   setCell_(leadsSheet, rowNumber, col, 'EstimatedCostShareLow', calc.EstimatedCostShareLow);
   setCell_(leadsSheet, rowNumber, col, 'EstimatedCostShareHigh', calc.EstimatedCostShareHigh);

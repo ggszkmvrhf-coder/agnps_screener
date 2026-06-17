@@ -24,7 +24,7 @@ from fastapi.responses import Response
 from fastapi.staticfiles import StaticFiles
 
 from app import boundary as boundary_mod
-from app import bmp_rules, calculators, gis_lookup, report_data, scoring
+from app import bmp_rules, calculators, gis_lookup, report_data, scoring, share_links
 from app import geometry_utils as geo
 from app.boundary import BoundaryStore
 from app.database import database_reachable, get_engine, table_exists
@@ -147,7 +147,11 @@ def _process(lead: Dict[str, Any]) -> Dict[str, Any]:
             "BoundarySource": boundary_source or "GPS point only",
             "BoundaryAreaAcres": boundary_acres,
         }
-        return report_data.build_response(lead, facts, bmps, scoring_result, calc, boundary_info)
+        response = report_data.build_response(lead, facts, bmps, scoring_result, calc, boundary_info)
+        # A signed, 24h boundary download link -- only meaningful when a boundary exists.
+        if geom_kind == "boundary":
+            response["BoundaryShareURL"] = share_links.build_share_url(lead.get("LeadID", ""), settings)
+        return response
     except Exception as exc:  # never leak a 500 to AppSheet's automation
         logger.exception("Unhandled error processing lead %s", lead.get("LeadID"))
         return report_data.error_response(lead, str(exc))
@@ -194,10 +198,22 @@ def process_sample() -> Dict[str, Any]:
 
 
 @app.get("/boundary/{lead_id}.kml")
-def boundary_kml(lead_id: str) -> Response:
-    """Export a saved boundary as KML (XML). Source order: local cache -> PostGIS
-    -> Field_Boundaries sheet (via AppSheet API). Opens in Google Earth/QGIS/ArcGIS."""
+def boundary_kml(
+    lead_id: str,
+    exp: Optional[str] = Query(default=None),
+    sig: Optional[str] = Query(default=None),
+) -> Response:
+    """Export a saved boundary as KML (XML). Requires a valid, unexpired signed
+    link (?exp=&sig=) so the link dies after the TTL. Source order: local cache
+    -> PostGIS -> Field_Boundaries sheet (via AppSheet API)."""
     settings = get_settings()
+    ok, reason = share_links.verify(lead_id, exp, sig, settings)
+    if not ok:
+        msg = "This download link has expired." if reason == "expired" else "Invalid or missing download link."
+        return Response(
+            content=f'<?xml version="1.0" encoding="UTF-8"?>\n<error>{msg}</error>',
+            media_type="application/xml", status_code=403,
+        )
     geom, _, _ = boundary_mod.load_stored_geometry(lead_id, _store)
     if geom is None:
         geom, _, _ = boundary_mod.load_database_geometry(lead_id, settings)
