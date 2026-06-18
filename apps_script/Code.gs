@@ -114,11 +114,17 @@ function processLeadsLocked_() {
     const row = rows[i];
     const rowNumber = i + 2;
     const status = String(get_(row, col, 'Status')).trim();
+    const boundaryStatus = String(get_(row, col, 'BoundaryStatus')).trim();
     const leadId = get_(row, col, 'LeadID');
     if (!leadId) continue;
 
     const explicitlySubmitted = status === CONFIG.statusValues.processing;
-    if (!explicitlySubmitted) continue;
+    const boundaryReady = boundaryStatus === CONFIG.boundaryDrawn && status !== CONFIG.statusValues.ready;
+    if (!explicitlySubmitted && !boundaryReady) continue;
+
+    if (!explicitlySubmitted) {
+      setCell_(leadsSheet, rowNumber, col, 'Status', CONFIG.statusValues.processing);
+    }
 
     try {
       const payload = buildPayload_(row, col, boundaries[leadId]);
