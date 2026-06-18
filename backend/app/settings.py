@@ -30,7 +30,14 @@ class Settings(BaseSettings):
     # If DATABASE_URL is empty, /process-lead can still enrich leads by calling
     # USGS/NYSDEC/NY Open Data/Census/USDA public services at processing time.
     public_gis_lookups_enabled: bool = True
-    public_api_timeout_sec: float = 12.0
+    public_api_timeout_sec: float = 5.0
+    # Keep no-database processing responsive. WI/PWL is the most request-heavy
+    # live lookup; default to a few useful samples/layers instead of exhaustive.
+    public_wipwl_max_points: int = 2
+    public_wipwl_layer_ids: str = "2,4"  # Lake, Stream
+    # USDA live soils are useful but often the slowest public calls. Leave them
+    # off for the cheap v1 path unless explicitly enabled in Render.
+    public_soil_lookups_enabled: bool = False
 
     # ------------------------------------------------------- API security ---
     # If set, /save-boundary and /process-lead require this key

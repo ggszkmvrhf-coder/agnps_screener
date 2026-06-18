@@ -14,6 +14,14 @@ services:
         value: "3.12"
       - key: PUBLIC_GIS_LOOKUPS_ENABLED
         value: "true"
+      - key: PUBLIC_API_TIMEOUT_SEC
+        value: "5"
+      - key: PUBLIC_WIPWL_MAX_POINTS
+        value: "2"
+      - key: PUBLIC_WIPWL_LAYER_IDS
+        value: "2,4"
+      - key: PUBLIC_SOIL_LOOKUPS_ENABLED
+        value: "false"
       - key: PUBLIC_BASE_URL
         value: https://agnps-backend.onrender.com
       - key: CORS_ALLOW_ORIGINS

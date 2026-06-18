@@ -38,6 +38,19 @@ WIPWL_LAYERS = [
 ]
 
 
+def _enabled_wipwl_layers(settings: Settings) -> List[Tuple[int, str]]:
+    raw = str(getattr(settings, "public_wipwl_layer_ids", "") or "").strip()
+    if not raw:
+        return WIPWL_LAYERS
+    requested = set()
+    for value in raw.split(","):
+        value = value.strip()
+        if value.isdigit():
+            requested.add(int(value))
+    layers = [item for item in WIPWL_LAYERS if item[0] in requested]
+    return layers or WIPWL_LAYERS
+
+
 def run_live_public_lookups(
     locate_geom: BaseGeometry,
     analysis_geom: BaseGeometry,
@@ -50,7 +63,10 @@ def run_live_public_lookups(
     facts.update(lookup_huc12(locate_geom, settings, warnings))
     facts.update(lookup_wipwl_waterbody(locate_geom, settings, warnings))
     facts.update(lookup_dac(locate_geom, analysis_geom, settings, warnings))
-    facts.update(lookup_soils(analysis_geom, settings, warnings))
+    if settings.public_soil_lookups_enabled:
+        facts.update(lookup_soils(analysis_geom, settings, warnings))
+    else:
+        warnings.append("Live USDA soil lookup skipped to keep no-database processing responsive.")
     return facts
 
 
@@ -334,8 +350,10 @@ def lookup_wipwl_waterbody(
     }
     candidates = []
 
-    for lon, lat in _lookup_points(geom):
-        for layer_id, layer_type in WIPWL_LAYERS:
+    points = _lookup_points(geom)[:max(1, int(settings.public_wipwl_max_points))]
+    layers = _enabled_wipwl_layers(settings)
+    for lon, lat in points:
+        for layer_id, layer_type in layers:
             data = _json_get(
                 f"{NYSDEC_WIPWL_BASE_URL}/{layer_id}/query",
                 {
