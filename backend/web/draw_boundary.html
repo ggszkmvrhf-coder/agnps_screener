@@ -14,7 +14,7 @@
 <body>
   <header id="bar">
     <div id="title">Draw Field / Problem Boundary</div>
-    <div id="lead">Lead: <span id="lead-id">—</span></div>
+    <div id="lead">Lead: <span id="lead-id">-</span></div>
   </header>
 
   <div id="map"></div>
@@ -22,7 +22,7 @@
   <div id="panel">
     <div id="hint">
       Trace the field with the <b>polygon</b> tool (this feeds the score), then <b>Save</b>.
-      Use the <b>line</b> tool to mark points of interest — those export with the .kml but don't affect the score.
+      Use <b>Draw note</b> to drag freehand colored lines for points of interest; notes export with the .kml but do not affect the score.
     </div>
     <div id="colors">
       <span>Line color:</span>
@@ -31,7 +31,11 @@
       <button class="swatch" data-color="#4363d8" style="background:#4363d8" title="Blue"></button>
       <button class="swatch" data-color="#3cb44b" style="background:#3cb44b" title="Green"></button>
     </div>
-    <div id="area">Area: <b>— acres</b></div>
+    <div id="note-tools">
+      <button id="freehand" type="button">Draw note</button>
+      <button id="delete-note" type="button" disabled>Delete selected note</button>
+    </div>
+    <div id="area">Area: <b>- acres</b></div>
     <div id="actions">
       <button id="save" disabled>Save boundary</button>
       <button id="download" disabled>Download .kml</button>
@@ -39,7 +43,7 @@
     </div>
     <div id="status" class="hidden"></div>
     <div id="disclaimer">
-      Internal screening tool. A rough boundary is fine — SWCD review is required.
+      Internal screening tool. A rough boundary is fine - SWCD review is required.
     </div>
   </div>
 

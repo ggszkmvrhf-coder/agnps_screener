@@ -21,6 +21,19 @@ html, body { height: 100%; margin: 0; font-family: Arial, Helvetica, sans-serif;
 }
 #colors .swatch.sel { border-color: #111; box-shadow: 0 0 0 2px #fff inset; }
 
+#note-tools {
+  display: flex; gap: 10px; margin: 8px 0 10px;
+}
+#note-tools button {
+  padding: 10px 12px; font-size: 14px; background: #4f6f7b;
+}
+#note-tools #freehand.active {
+  background: #0f6f44;
+}
+#note-tools #delete-note {
+  background: #7a4f4f;
+}
+
 #area { font-size: 18px; margin: 6px 0 12px; }
 
 #actions { display: flex; gap: 10px; }
@@ -30,6 +43,10 @@ button {
 }
 button:disabled { background: #9bb0b7; cursor: not-allowed; }
 #clear { background: #666; }
+
+#map.freehand-active {
+  cursor: crosshair;
+}
 
 #status { margin-top: 12px; padding: 10px; border-radius: 8px; font-size: 14px; }
 #status.info { background: #eef4f6; color: #234; }

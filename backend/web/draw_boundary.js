@@ -46,12 +46,17 @@
   map.addLayer(annotations);
 
   var currentColor = "#e6194b";
+  var freehandActive = false;
+  var sketching = false;
+  var sketchLine = null;
+  var sketchPoints = [];
+  var selectedAnnotation = null;
 
   var drawControl = new L.Control.Draw({
     edit: { featureGroup: drawn, remove: true },
     draw: {
       polygon: { allowIntersection: false, showArea: true, shapeOptions: { color: "#1f78ff" } },
-      polyline: { shapeOptions: { color: currentColor, weight: 4 } },
+      polyline: false,
       marker: true,
       rectangle: false, circle: false, circlemarker: false,
     },
@@ -61,6 +66,8 @@
   var saveBtn = document.getElementById("save");
   var downloadBtn = document.getElementById("download");
   var clearBtn = document.getElementById("clear");
+  var freehandBtn = document.getElementById("freehand");
+  var deleteNoteBtn = document.getElementById("delete-note");
   var areaEl = document.getElementById("area");
   var statusEl = document.getElementById("status");
 
@@ -79,6 +86,64 @@
 
   function acresOfLayer(layer) { return L.GeometryUtil.geodesicArea(layer.getLatLngs()[0]) / SQM_PER_ACRE; }
 
+  function setMapDragEnabled(enabled) {
+    if (enabled) {
+      map.dragging.enable();
+      map.doubleClickZoom.enable();
+      if (map.tap) map.tap.enable();
+    } else {
+      map.dragging.disable();
+      map.doubleClickZoom.disable();
+      if (map.tap) map.tap.disable();
+    }
+  }
+
+  function setFreehandActive(active) {
+    freehandActive = active;
+    freehandBtn.classList.toggle("active", active);
+    freehandBtn.textContent = active ? "Drawing note..." : "Draw note";
+    map.getContainer().classList.toggle("freehand-active", active);
+    setMapDragEnabled(!active);
+    if (active) {
+      clearAnnotationSelection();
+      showStatus("Drag on the map to draw a colored note. Tap Draw note again to pan.", "info");
+    } else if (!sketching) {
+      showStatus("", "hidden");
+    }
+  }
+
+  function setAnnotationSelected(layer, selected) {
+    if (layer && layer.setStyle) {
+      layer.setStyle({
+        weight: selected ? (layer._noteWeight || 5) + 3 : (layer._noteWeight || 5),
+        opacity: selected ? 1 : 0.95,
+      });
+    }
+  }
+
+  function clearAnnotationSelection() {
+    if (selectedAnnotation) setAnnotationSelected(selectedAnnotation, false);
+    selectedAnnotation = null;
+    deleteNoteBtn.disabled = true;
+  }
+
+  function selectAnnotation(layer) {
+    clearAnnotationSelection();
+    selectedAnnotation = layer;
+    setAnnotationSelected(layer, true);
+    deleteNoteBtn.disabled = false;
+    showStatus("Note selected. Tap Delete selected note to remove it.", "info");
+  }
+
+  function attachAnnotationBehavior(layer, weight) {
+    layer._noteWeight = weight || layer._noteWeight || 5;
+    layer.on("click", function (e) {
+      if (freehandActive) return;
+      if (e.originalEvent) L.DomEvent.stopPropagation(e.originalEvent);
+      selectAnnotation(layer);
+    });
+  }
+
   function refreshUI() {
     var total = 0;
     drawn.eachLayer(function (l) { total += acresOfLayer(l); });
@@ -88,17 +153,87 @@
     saveBtn.disabled = !hasBoundary;       // only a polygon can be saved
     downloadBtn.disabled = !hasAnything;   // KML can include just annotations too
     clearBtn.disabled = !hasAnything;
+    deleteNoteBtn.disabled = !selectedAnnotation || !annotations.hasLayer(selectedAnnotation);
   }
+
+  function shouldAddSketchPoint(latlng) {
+    if (!sketchPoints.length) return true;
+    var prev = map.latLngToLayerPoint(sketchPoints[sketchPoints.length - 1]);
+    var next = map.latLngToLayerPoint(latlng);
+    return prev.distanceTo(next) >= 4;
+  }
+
+  function startSketch(e) {
+    if (!freehandActive || sketching) return;
+    if (e.originalEvent && e.originalEvent.button && e.originalEvent.button !== 0) return;
+    if (e.originalEvent) L.DomEvent.preventDefault(e.originalEvent);
+    sketching = true;
+    sketchPoints = [e.latlng];
+    sketchLine = L.polyline(sketchPoints, {
+      color: currentColor,
+      weight: 5,
+      opacity: 0.95,
+      smoothFactor: 1,
+    }).addTo(map);
+  }
+
+  function moveSketch(e) {
+    if (!sketching || !sketchLine || !e.latlng) return;
+    if (e.originalEvent) L.DomEvent.preventDefault(e.originalEvent);
+    if (!shouldAddSketchPoint(e.latlng)) return;
+    sketchPoints.push(e.latlng);
+    sketchLine.addLatLng(e.latlng);
+  }
+
+  function finishSketch() {
+    if (!sketching) return;
+    sketching = false;
+    var added = false;
+    if (sketchLine && sketchPoints.length > 1) {
+      annotations.addLayer(sketchLine);
+      attachAnnotationBehavior(sketchLine, 5);
+      added = true;
+    } else if (sketchLine) {
+      map.removeLayer(sketchLine);
+    }
+    sketchLine = null;
+    sketchPoints = [];
+    setFreehandActive(false);
+    if (added) showStatus("Note added. Tap it to select/delete, or tap Draw note to add another.", "success");
+    refreshUI();
+  }
+
+  freehandBtn.addEventListener("click", function () {
+    setFreehandActive(!freehandActive);
+  });
+
+  deleteNoteBtn.addEventListener("click", function () {
+    if (!selectedAnnotation) return;
+    annotations.removeLayer(selectedAnnotation);
+    map.removeLayer(selectedAnnotation);
+    selectedAnnotation = null;
+    refreshUI();
+    showStatus("Selected note deleted.", "success");
+  });
+
+  map.on("mousedown touchstart", startSketch);
+  map.on("mousemove touchmove", moveSketch);
+  map.on("mouseup touchend", finishSketch);
+  map.on(L.Draw.Event.DRAWSTART, function () {
+    if (freehandActive) setFreehandActive(false);
+  });
 
   map.on(L.Draw.Event.CREATED, function (e) {
     if (e.layerType === "polygon") {
       drawn.clearLayers();          // keep a single boundary
       drawn.addLayer(e.layer);
     } else if (e.layerType === "polyline") {
-      e.layer.setStyle({ color: currentColor, weight: 4 });
+      e.layer.setStyle({ color: currentColor, weight: 5, opacity: 0.95 });
       annotations.addLayer(e.layer);
+      attachAnnotationBehavior(e.layer, 5);
     } else {
       annotations.addLayer(e.layer); // marker / point of interest
+      attachAnnotationBehavior(e.layer, 5);
     }
     refreshUI();
   });
@@ -108,6 +243,7 @@
   clearBtn.addEventListener("click", function () {
     drawn.clearLayers();
     annotations.clearLayers();
+    clearAnnotationSelection();
     refreshUI();
     showStatus("", "hidden");
   });
