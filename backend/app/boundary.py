@@ -12,6 +12,7 @@ while this backend instance is alive.
 """
 import json
 import logging
+import re
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
@@ -25,6 +26,12 @@ from .settings import Settings
 
 logger = logging.getLogger(__name__)
 _lock = threading.Lock()
+_SAFE_LEAD_ID = re.compile(r"^[A-Za-z0-9_-]+$")
+
+
+def _safe_lead_id(value: Any) -> Optional[str]:
+    lead_id = str(value or "").strip()
+    return lead_id if _SAFE_LEAD_ID.fullmatch(lead_id) else None
 
 
 class BoundaryStore:
@@ -63,6 +70,12 @@ def save_boundary(req: Dict[str, Any], settings: Settings, store: BoundaryStore)
 
     if not lead_id:
         return {"success": False, "message": "LeadID is required."}
+    lead_id = _safe_lead_id(lead_id)
+    if not lead_id:
+        return {
+            "success": False,
+            "message": "LeadID may only contain letters, numbers, underscores, and hyphens.",
+        }
 
     geom, valid, geom_warning = geo.validate_geojson_polygon(req.get("BoundaryGeoJSON"))
     if not valid or geom is None:
@@ -92,6 +105,9 @@ def save_boundary(req: Dict[str, Any], settings: Settings, store: BoundaryStore)
 
     db_saved = _save_boundary_to_postgis(record, settings)
     pushed = _maybe_push_to_appsheet(record, settings)
+    durable_configured = bool(
+        settings.database_url or (settings.appsheet_app_id and settings.appsheet_api_key)
+    )
 
     msg = f"Boundary saved. Approximate area: {acres} acres." if acres is not None \
         else "Boundary saved (acreage unavailable)."
@@ -99,7 +115,22 @@ def save_boundary(req: Dict[str, Any], settings: Settings, store: BoundaryStore)
         msg += " It is saved in PostGIS for processing."
     elif pushed:
         msg += " It is saved to AppSheet for processing."
-    elif not pushed:
+    elif durable_configured:
+        msg = (
+            "Boundary was valid, but it could not be saved to the configured durable "
+            "system. Check the AppSheet/PostGIS settings and try again."
+        )
+        warnings.append("Boundary is only present in the backend cache; durable save failed.")
+        return {
+            "success": False,
+            "LeadID": lead_id,
+            "BoundaryAreaAcres": acres,
+            "BoundaryCentroidLat": clat,
+            "BoundaryCentroidLng": clng,
+            "message": msg,
+            "warnings": warnings,
+        }
+    else:
         msg += " Return to AppSheet and sync; processing will use the backend cache."
 
     return {
@@ -281,6 +312,7 @@ def find_boundary_via_appsheet(lead_id: str, settings: Settings):
     JSON cache has been wiped (e.g. Render free-tier restart). Returns
     (geom4326, source, record) or (None, None, None).
     """
+    lead_id = _safe_lead_id(lead_id)
     if not lead_id or not (settings.appsheet_app_id and settings.appsheet_api_key):
         return None, None, None
     rows = _appsheet_find(
@@ -384,9 +416,37 @@ def _appsheet_action(
         },
     )
     try:
-        urllib.request.urlopen(request, timeout=10).read()
+        raw = urllib.request.urlopen(request, timeout=10).read()
+        text_body = raw.decode("utf-8", errors="replace").strip()
+        if text_body:
+            try:
+                data = json.loads(text_body)
+            except json.JSONDecodeError:
+                data = None
+            if _appsheet_response_has_error(data):
+                message = f"AppSheet {action} on {table} returned an error: {text_body[:500]}"
+                if raise_errors:
+                    raise RuntimeError(message)
+                logger.warning(message)
+                return False
         return True
-    except urllib.error.HTTPError:
+    except urllib.error.HTTPError as exc:
         if raise_errors:
-            raise
+            body = exc.read().decode("utf-8", errors="replace")
+            raise RuntimeError(
+                f"AppSheet {action} on {table} failed with HTTP {exc.code}: {body[:500]}"
+            ) from exc
         return False
+
+
+def _appsheet_response_has_error(data: Any) -> bool:
+    if not isinstance(data, dict):
+        return False
+    status = str(data.get("Status") or data.get("status") or "").strip().lower()
+    if status in ("error", "failed", "failure"):
+        return True
+    for key in ("Errors", "Error", "error", "ErrorMessage", "errorMessage"):
+        value = data.get(key)
+        if value not in (None, "", [], {}):
+            return True
+    return False

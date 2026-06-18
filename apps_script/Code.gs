@@ -26,6 +26,49 @@ const CONFIG = {
   boundaryDrawn: 'Drawn',
 };
 
+const REQUIRED_HEADERS = {
+  Leads: [
+    'LeadID', 'CreatedAt', 'UpdatedAt', 'SalesRepEmail', 'SalesRepName',
+    'CustomerName', 'FarmName', 'FieldName', 'ProblemType', 'ProblemDescription',
+    'ProblemLocation', 'GPSLatitude', 'GPSLongitude', 'BoundaryStatus',
+    'BoundarySource', 'BoundaryAreaAcres', 'BoundaryDrawURL', 'BoundaryShareURL',
+    'FarmerInterestedInCostShare', 'PermissionToShareWithSWCD', 'Urgency',
+    'SendToDesignTeam', 'Status', 'CandidateScore', 'CandidateClass',
+    'GISConfidence', 'EstimatedProjectCost', 'EstimatedCostShareLow',
+    'EstimatedCostShareHigh', 'EstimatedFarmerCostLow', 'EstimatedFarmerCostHigh',
+    'EstimatedCompanyRevenue', 'ReportURL', 'InternalNotes', 'NextAction',
+  ],
+  Field_Boundaries: [
+    'BoundaryID', 'LeadID', 'CreatedAt', 'BoundarySource', 'BoundaryGeoJSON',
+    'BoundaryWKT', 'BoundaryAreaAcres', 'BoundaryCentroidLat',
+    'BoundaryCentroidLng', 'BoundaryConfidence', 'GeometryValid',
+    'GeometryWarning', 'Notes',
+  ],
+  Auto_Facts: [
+    'FactID', 'LeadID', 'ProcessedAt', 'AnalysisGeometrySource', 'CountyAuto',
+    'TownAuto', 'HUC8', 'HUC10', 'HUC12', 'HUC12Name',
+    'NearestWaterbodyName', 'NearestWaterbodyType', 'DistanceToWaterbodyFt',
+    'WIPWLNearby', 'WIPWLSummary', 'DACIntersecting', 'DACNearby',
+    'DominantSoilDrainageClass', 'DominantHydrologicSoilGroup',
+    'MeanSlopePercent', 'MaxSlopePercent', 'GISConfidence',
+    'MissingInfoChecklist', 'HumanReviewWarnings', 'ProcessingError',
+    'WaterQualityConnectionScore', 'WIPWLScore', 'BMPFitScore',
+    'TopoSoilsScore', 'DocumentationScore', 'DACScore', 'ScoreExplanation',
+  ],
+  BMP_Candidates: [
+    'BMPCandidateID', 'LeadID', 'BMPName', 'BMPCategory', 'ReasonSuggested',
+    'Confidence', 'NeedsHumanReview', 'Notes',
+  ],
+  Calculations: [
+    'CalculationID', 'LeadID', 'CreatedAt', 'EstimatedProjectCost',
+    'CostShareLowPercent', 'CostShareHighPercent', 'EstimatedCostShareLow',
+    'EstimatedCostShareHigh', 'EstimatedFarmerCostLow',
+    'EstimatedFarmerCostHigh', 'EstimatedCompanyRevenue',
+    'EstimatedCompanyGrossMarginPercent', 'EstimatedCompanyGrossMarginDollars',
+    'Assumptions', 'CalculatorWarnings',
+  ],
+};
+
 function setUpTrigger() {
   ScriptApp.getProjectTriggers().forEach(function (t) {
     if (t.getHandlerFunction() === 'processLeads') ScriptApp.deleteTrigger(t);
@@ -41,13 +84,27 @@ function onOpen() {
 
 /** Main entry point. */
 function processLeads() {
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(30000)) {
+    Logger.log('Another processLeads run is active. Skipping this run.');
+    return;
+  }
+  try {
+    processLeadsLocked_();
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function processLeadsLocked_() {
   const props = PropertiesService.getScriptProperties();
   const backendUrl = props.getProperty('BACKEND_URL');
   if (!backendUrl) { Logger.log('BACKEND_URL not set. Aborting.'); return; }
   const token = props.getProperty('BACKEND_TOKEN');
 
   const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const leadsSheet = ss.getSheetByName(CONFIG.sheets.leads);
+  validateWorkbook_(ss);
+  const leadsSheet = requireSheet_(ss, CONFIG.sheets.leads);
   const headers = leadsSheet.getRange(1, 1, 1, leadsSheet.getLastColumn()).getValues()[0];
   const col = indexMap_(headers);
   const rows = leadsSheet.getDataRange().getValues().slice(1);
@@ -83,9 +140,9 @@ function processLeads() {
 
 /** Map LeadID -> BoundaryGeoJSON string from the Field_Boundaries sheet. */
 function boundaryMap_(ss) {
-  const sheet = ss.getSheetByName(CONFIG.sheets.boundaries);
+  const sheet = requireSheet_(ss, CONFIG.sheets.boundaries);
   const map = {};
-  if (!sheet || sheet.getLastRow() < 2) return map;
+  if (sheet.getLastRow() < 2) return map;
   const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
   const c = indexMap_(headers);
   sheet.getDataRange().getValues().slice(1).forEach(function (r) {
@@ -135,6 +192,7 @@ function writeResult_(ss, leadsSheet, rowNumber, col, leadId, result) {
   const af = result.AutoFacts || {};
   const calc = result.Calculations || {};
 
+  deleteOutputRows_(ss, leadId);
   appendAutoFacts_(ss, leadId, af);
   appendBmpCandidates_(ss, leadId, result.BMPCandidates || []);
   appendCalculation_(ss, leadId, calc);
@@ -161,7 +219,7 @@ function writeResult_(ss, leadsSheet, rowNumber, col, leadId, result) {
 }
 
 function appendAutoFacts_(ss, leadId, af) {
-  const sheet = ss.getSheetByName(CONFIG.sheets.autoFacts);
+  const sheet = requireSheet_(ss, CONFIG.sheets.autoFacts);
   appendByHeader_(sheet, {
     FactID: leadId + '-' + new Date().getTime(),
     LeadID: leadId, ProcessedAt: new Date(),
@@ -187,7 +245,7 @@ function appendAutoFacts_(ss, leadId, af) {
 }
 
 function appendBmpCandidates_(ss, leadId, bmps) {
-  const sheet = ss.getSheetByName(CONFIG.sheets.bmpCandidates);
+  const sheet = requireSheet_(ss, CONFIG.sheets.bmpCandidates);
   bmps.forEach(function (b, idx) {
     appendByHeader_(sheet, {
       BMPCandidateID: leadId + '-bmp-' + (idx + 1), LeadID: leadId,
@@ -198,8 +256,7 @@ function appendBmpCandidates_(ss, leadId, bmps) {
 }
 
 function appendCalculation_(ss, leadId, calc) {
-  const sheet = ss.getSheetByName(CONFIG.sheets.calculations);
-  if (!sheet) return;
+  const sheet = requireSheet_(ss, CONFIG.sheets.calculations);
   appendByHeader_(sheet, {
     CalculationID: leadId + '-calc-' + new Date().getTime(), LeadID: leadId, CreatedAt: new Date(),
     EstimatedProjectCost: calc.EstimatedProjectCost,
@@ -214,6 +271,47 @@ function appendCalculation_(ss, leadId, calc) {
 }
 
 /* ----------------------------- helpers ----------------------------- */
+function validateWorkbook_(ss) {
+  Object.keys(REQUIRED_HEADERS).forEach(function (sheetName) {
+    const sheet = requireSheet_(ss, sheetName);
+    requireHeaders_(sheet, REQUIRED_HEADERS[sheetName]);
+  });
+}
+
+function requireSheet_(ss, sheetName) {
+  const sheet = ss.getSheetByName(sheetName);
+  if (!sheet) throw new Error('Missing required sheet tab: ' + sheetName);
+  return sheet;
+}
+
+function requireHeaders_(sheet, required) {
+  const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
+  const col = indexMap_(headers);
+  const missing = required.filter(function (name) { return col[name] === undefined; });
+  if (missing.length) {
+    throw new Error('Sheet ' + sheet.getName() + ' is missing columns: ' + missing.join(', '));
+  }
+}
+
+function deleteOutputRows_(ss, leadId) {
+  deleteRowsByLeadId_(requireSheet_(ss, CONFIG.sheets.autoFacts), leadId);
+  deleteRowsByLeadId_(requireSheet_(ss, CONFIG.sheets.bmpCandidates), leadId);
+  deleteRowsByLeadId_(requireSheet_(ss, CONFIG.sheets.calculations), leadId);
+}
+
+function deleteRowsByLeadId_(sheet, leadId) {
+  if (!leadId || sheet.getLastRow() < 2) return;
+  const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
+  const col = indexMap_(headers);
+  if (col['LeadID'] === undefined) throw new Error('Sheet ' + sheet.getName() + ' is missing LeadID.');
+  const rows = sheet.getRange(2, 1, sheet.getLastRow() - 1, sheet.getLastColumn()).getValues();
+  for (let i = rows.length - 1; i >= 0; i--) {
+    if (String(rows[i][col['LeadID']]) === String(leadId)) {
+      sheet.deleteRow(i + 2);
+    }
+  }
+}
+
 function indexMap_(headers) {
   const m = {};
   headers.forEach(function (h, i) { m[String(h).trim()] = i; });

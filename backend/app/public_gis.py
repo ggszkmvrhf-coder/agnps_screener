@@ -133,6 +133,37 @@ def _lookup_point(geom: BaseGeometry) -> Tuple[float, float]:
     return float(p.x), float(p.y)
 
 
+def _lookup_points(geom: BaseGeometry) -> List[Tuple[float, float]]:
+    """Return a few lon/lat samples so edge-near features are less likely missed."""
+    if isinstance(geom, Point):
+        return [(float(geom.x), float(geom.y))]
+
+    points: List[Tuple[float, float]] = []
+
+    def add_point(candidate: BaseGeometry) -> None:
+        if candidate is None or candidate.is_empty:
+            return
+        key = (round(float(candidate.x), 6), round(float(candidate.y), 6))
+        if key not in points:
+            points.append(key)
+
+    try:
+        add_point(geom.representative_point())
+    except Exception:
+        pass
+    try:
+        add_point(geom.centroid)
+    except Exception:
+        pass
+
+    minx, miny, maxx, maxy = geom.bounds
+    midx = (minx + maxx) / 2
+    midy = (miny + maxy) / 2
+    for x, y in ((minx, midy), (maxx, midy), (midx, miny), (midx, maxy)):
+        add_point(Point(x, y))
+    return points[:6]
+
+
 def _transformer(settings: Settings):
     try:
         from pyproj import Transformer
@@ -140,6 +171,17 @@ def _transformer(settings: Settings):
         return Transformer.from_crs(4326, settings.projected_crs, always_xy=True).transform
     except Exception:
         return None
+
+
+def _buffer_geom_feet(geom: BaseGeometry, feet: float, settings: Settings) -> BaseGeometry:
+    try:
+        from pyproj import Transformer
+
+        fwd = Transformer.from_crs(4326, settings.projected_crs, always_xy=True).transform
+        rev = Transformer.from_crs(settings.projected_crs, 4326, always_xy=True).transform
+        return shp_transform(rev, shp_transform(fwd, geom).buffer(feet / FT_PER_M))
+    except Exception:
+        return geom
 
 
 def _distance_ft(a: BaseGeometry, b: BaseGeometry, settings: Settings) -> Optional[float]:
@@ -290,33 +332,33 @@ def lookup_wipwl_waterbody(
         "WIPWLNearby": False,
         "WIPWLSummary": None,
     }
-    lon, lat = _lookup_point(geom)
     candidates = []
 
-    for layer_id, layer_type in WIPWL_LAYERS:
-        data = _json_get(
-            f"{NYSDEC_WIPWL_BASE_URL}/{layer_id}/query",
-            {
-                "f": "json",
-                "geometry": f"{lon},{lat}",
-                "geometryType": "esriGeometryPoint",
-                "inSR": 4326,
-                "outSR": 4326,
-                "distance": settings.wipwl_search_radius_ft,
-                "units": "esriSRUnit_Foot",
-                "spatialRel": "esriSpatialRelIntersects",
-                "outFields": "*",
-                "returnGeometry": "true",
-            },
-            settings,
-            f"NYSDEC WI/PWL {layer_type}",
-            warnings,
-        )
-        for feature in (data or {}).get("features") or []:
-            attrs = feature.get("attributes") or {}
-            fgeom = _arcgis_geom_to_shapely(feature.get("geometry") or {})
-            dist = _distance_ft(geom, fgeom, settings) if fgeom is not None else None
-            candidates.append((dist if dist is not None else 1e12, layer_type, attrs))
+    for lon, lat in _lookup_points(geom):
+        for layer_id, layer_type in WIPWL_LAYERS:
+            data = _json_get(
+                f"{NYSDEC_WIPWL_BASE_URL}/{layer_id}/query",
+                {
+                    "f": "json",
+                    "geometry": f"{lon},{lat}",
+                    "geometryType": "esriGeometryPoint",
+                    "inSR": 4326,
+                    "outSR": 4326,
+                    "distance": settings.wipwl_search_radius_ft,
+                    "units": "esriSRUnit_Foot",
+                    "spatialRel": "esriSpatialRelIntersects",
+                    "outFields": "*",
+                    "returnGeometry": "true",
+                },
+                settings,
+                f"NYSDEC WI/PWL {layer_type}",
+                warnings,
+            )
+            for feature in (data or {}).get("features") or []:
+                attrs = feature.get("attributes") or {}
+                fgeom = _arcgis_geom_to_shapely(feature.get("geometry") or {})
+                dist = _distance_ft(geom, fgeom, settings) if fgeom is not None else None
+                candidates.append((dist if dist is not None else 1e12, layer_type, attrs))
 
     if not candidates:
         warnings.append(
@@ -380,8 +422,13 @@ def lookup_dac(
         out["DACNearby"] = out["DACIntersecting"]
 
     if not out["DACNearby"]:
+        nearby_geom = _buffer_geom_feet(
+            analysis_geom,
+            settings.dac_nearby_distance_ft,
+            settings,
+        )
         where = (
-            f"intersects(the_geom, '{analysis_geom.wkt}') "
+            f"intersects(the_geom, '{nearby_geom.wkt}') "
             "AND dac_designation = 'Designated as DAC'"
         )
         rows = _query_dac(where, settings, warnings)

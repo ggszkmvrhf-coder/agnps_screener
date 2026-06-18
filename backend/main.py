@@ -17,6 +17,7 @@ import json
 import logging
 from pathlib import Path
 from typing import Any, Dict, Optional
+from xml.sax.saxutils import escape
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
@@ -39,12 +40,16 @@ logger = logging.getLogger("agnps")
 HERE = Path(__file__).parent
 SAMPLE_PAYLOAD = HERE / "sample_payload.json"
 
+_settings = get_settings()
 app = FastAPI(title="AgNPS Candidate Lead Screener", version="0.2.0")
 app.add_middleware(
-    CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"],
+    CORSMiddleware,
+    allow_origins=_settings.cors_origins,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
-_store = BoundaryStore(get_settings().boundary_store_path)
+_store = BoundaryStore(_settings.boundary_store_path)
 
 _LAYER_ATTRS = [
     "counties_table", "towns_table", "huc8_table", "huc10_table", "huc12_table",
@@ -191,10 +196,16 @@ def process_lead(lead: LeadProcessRequest) -> Dict[str, Any]:
     return _process(lead.model_dump())
 
 
-@app.post("/debug/process-sample", response_model=LeadProcessResponse)
+@app.post("/debug/process-sample", response_model=LeadProcessResponse, dependencies=[Depends(require_api_key)])
 def process_sample() -> Dict[str, Any]:
     payload = json.loads(SAMPLE_PAYLOAD.read_text(encoding="utf-8"))
     return _process(payload)
+
+
+def _kml_filename(value: str) -> str:
+    safe = "".join(ch if ch.isalnum() or ch in "-_." else "_" for ch in str(value or "boundary"))
+    safe = safe.strip("._")[:80] or "boundary"
+    return f"{safe}.kml"
 
 
 @app.get("/boundary/{lead_id}.kml")
@@ -210,8 +221,10 @@ def boundary_kml(
     ok, reason = share_links.verify(lead_id, exp, sig, settings)
     if not ok:
         msg = "This download link has expired." if reason == "expired" else "Invalid or missing download link."
+        if reason == "not-configured":
+            msg = "Boundary downloads are not configured."
         return Response(
-            content=f'<?xml version="1.0" encoding="UTF-8"?>\n<error>{msg}</error>',
+            content=f'<?xml version="1.0" encoding="UTF-8"?>\n<error>{escape(msg)}</error>',
             media_type="application/xml", status_code=403,
         )
     geom, _, _ = boundary_mod.load_stored_geometry(lead_id, _store)
@@ -221,13 +234,16 @@ def boundary_kml(
         geom, _, _ = boundary_mod.find_boundary_via_appsheet(lead_id, settings)
     if geom is None:
         return Response(
-            content=f'<?xml version="1.0" encoding="UTF-8"?>\n<error>No boundary found for {lead_id}</error>',
+            content=(
+                '<?xml version="1.0" encoding="UTF-8"?>\n'
+                f"<error>No boundary found for {escape(lead_id)}</error>"
+            ),
             media_type="application/xml", status_code=404,
         )
     return Response(
         content=geo.geometry_to_kml(geom, lead_id),
         media_type="application/vnd.google-earth.kml+xml",
-        headers={"Content-Disposition": f'attachment; filename="{lead_id}.kml"'},
+        headers={"Content-Disposition": f'attachment; filename="{_kml_filename(lead_id)}"'},
     )
 
 

@@ -12,33 +12,36 @@ import hashlib
 import hmac
 import time
 from typing import Optional, Tuple
+from urllib.parse import quote
 
 from .settings import Settings
 
-# Fallback only if API_KEY is unset (links would still verify, just not secret).
-_FALLBACK_SECRET = "agnps-unsigned-fallback"
-
-
-def _secret(settings: Settings) -> str:
-    return settings.api_key or _FALLBACK_SECRET
+def _secret(settings: Settings) -> Optional[str]:
+    return settings.api_key
 
 
 def sign(lead_id: str, exp: int, settings: Settings) -> str:
+    secret = _secret(settings)
+    if not secret:
+        raise ValueError("API_KEY is required to sign boundary share links.")
     msg = f"{lead_id}.{exp}".encode("utf-8")
-    return hmac.new(_secret(settings).encode("utf-8"), msg, hashlib.sha256).hexdigest()
+    return hmac.new(secret.encode("utf-8"), msg, hashlib.sha256).hexdigest()
 
 
 def build_share_url(lead_id: str, settings: Settings) -> Optional[str]:
     """Return a full signed KML URL valid for share_link_ttl_hours, or None."""
     base = (settings.public_base_url or "").rstrip("/")
-    if not base or not lead_id:
+    if not base or not lead_id or not settings.api_key:
         return None
     exp = int(time.time()) + settings.share_link_ttl_hours * 3600
-    return f"{base}/boundary/{lead_id}.kml?exp={exp}&sig={sign(lead_id, exp, settings)}"
+    path_id = quote(str(lead_id), safe="")
+    return f"{base}/boundary/{path_id}.kml?exp={exp}&sig={sign(lead_id, exp, settings)}"
 
 
 def verify(lead_id: str, exp: Optional[str], sig: Optional[str], settings: Settings) -> Tuple[bool, str]:
     """Validate a signed link. Returns (ok, reason)."""
+    if not settings.api_key:
+        return False, "not-configured"
     if not exp or not sig:
         return False, "missing"
     try:

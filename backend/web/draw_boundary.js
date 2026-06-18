@@ -117,6 +117,18 @@
     var h = (hex || "#e6194b").replace("#", "");
     return "ff" + h.substr(4, 2) + h.substr(2, 2) + h.substr(0, 2);
   }
+  function escapeXml(value) {
+    return String(value == null ? "" : value)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&apos;");
+  }
+  function safeFileName(value) {
+    var safe = String(value || "boundary").replace(/[^A-Za-z0-9._-]/g, "_").replace(/^[._]+|[._]+$/g, "");
+    return (safe || "boundary").slice(0, 80);
+  }
   function coordStr(latlngs, close) {
     var c = latlngs.map(function (p) { return p.lng + "," + p.lat + ",0"; });
     if (close && latlngs.length) c.push(latlngs[0].lng + "," + latlngs[0].lat + ",0");
@@ -148,7 +160,7 @@
       }
     });
     return '<?xml version="1.0" encoding="UTF-8"?>\n' +
-      '<kml xmlns="http://www.opengis.net/kml/2.2"><Document><name>' + (leadId || "boundary") +
+      '<kml xmlns="http://www.opengis.net/kml/2.2"><Document><name>' + escapeXml(leadId || "boundary") +
       "</name>" + styles + placemarks + "</Document></kml>";
   }
 
@@ -161,7 +173,7 @@
     var url = URL.createObjectURL(blob);
     var a = document.createElement("a");
     a.href = url;
-    a.download = (leadId || "boundary") + ".kml";
+    a.download = safeFileName(leadId || "boundary") + ".kml";
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);

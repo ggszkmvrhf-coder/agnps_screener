@@ -7,6 +7,7 @@ input yields (None / warning), never an exception out of the API.
 import json
 import logging
 from typing import Any, Optional, Tuple
+from xml.sax.saxutils import escape
 
 from shapely import wkt as shapely_wkt
 from shapely.geometry import Point, mapping, shape
@@ -202,8 +203,9 @@ def geometry_to_kml(geom4326: BaseGeometry, name: str = "boundary") -> str:
         body = "<MultiGeometry>" + "".join(_kml_polygon(p) for p in geom4326.geoms) + "</MultiGeometry>"
     else:
         body = _kml_polygon(geom4326)
+    safe_name = escape(str(name or "boundary"))
     return (
         '<?xml version="1.0" encoding="UTF-8"?>\n'
         '<kml xmlns="http://www.opengis.net/kml/2.2"><Document><Placemark>'
-        f"<name>{name}</name>{body}</Placemark></Document></kml>"
+        f"<name>{safe_name}</name>{body}</Placemark></Document></kml>"
     )

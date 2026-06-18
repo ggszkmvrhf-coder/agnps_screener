@@ -7,7 +7,7 @@ related lookup/feature and is reported as a warning.
 """
 from functools import lru_cache
 from pathlib import Path
-from typing import Dict, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -43,6 +43,15 @@ class Settings(BaseSettings):
     public_base_url: str = "https://agnps-backend.onrender.com"
     # Signed boundary KML links expire after this many hours (then the link dies).
     share_link_ttl_hours: int = 24
+
+    # -------------------------------------------------------------- browser ---
+    # Comma-separated list of origins allowed to call API endpoints from a
+    # browser. Keep this narrow in production; add custom domains as needed.
+    cors_allow_origins: str = (
+        "https://agnps-backend.onrender.com,"
+        "http://localhost:8000,"
+        "http://127.0.0.1:8000"
+    )
 
     # ---------------------------------------------------------- web / files ---
     web_dir: str = str(BACKEND_DIR / "web")
@@ -112,6 +121,14 @@ class Settings(BaseSettings):
     @property
     def point_buffer_m(self) -> float:
         return self.point_buffer_ft / FT_PER_M
+
+    @property
+    def cors_origins(self) -> List[str]:
+        return [
+            origin.strip()
+            for origin in self.cors_allow_origins.split(",")
+            if origin.strip()
+        ]
 
     # Rough project-cost placeholders: ProblemType -> (base $, $/acre).
     # PLACEHOLDERS ONLY -- edit freely; the company owns these numbers.
