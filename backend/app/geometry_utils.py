@@ -6,6 +6,7 @@ input yields (None / warning), never an exception out of the API.
 """
 import json
 import logging
+import re
 from typing import Any, Optional, Tuple
 from xml.sax.saxutils import escape
 
@@ -180,6 +181,67 @@ def geom_as_geojson(geom: BaseGeometry) -> dict:
     return mapping(geom)
 
 
+_ANNOTATION_GEOM_TYPES = {"Point", "MultiPoint", "LineString", "MultiLineString"}
+_HEX_COLOR = re.compile(r"^#[0-9A-Fa-f]{6}$")
+
+
+def _count_positions(coords: Any) -> int:
+    if not isinstance(coords, list):
+        return 0
+    if coords and all(isinstance(v, (int, float)) for v in coords[:2]):
+        return 1
+    return sum(_count_positions(child) for child in coords)
+
+
+def normalize_annotation_geojson(gj: Any, max_features: int = 75, max_positions: int = 5000) -> Tuple[Optional[dict], str]:
+    """Sanitize optional map notes.
+
+    Notes are intentionally limited to Point/MultiPoint/LineString/MultiLineString
+    and kept separate from the boundary polygon so they cannot affect scoring.
+    """
+    if gj in (None, ""):
+        return None, ""
+    try:
+        if isinstance(gj, str):
+            gj = json.loads(gj)
+        if not isinstance(gj, dict):
+            return None, "Boundary notes were ignored because they were not GeoJSON."
+
+        gtype = gj.get("type")
+        if gtype == "FeatureCollection":
+            raw_features = gj.get("features") or []
+        elif gtype == "Feature":
+            raw_features = [gj]
+        else:
+            raw_features = [{"type": "Feature", "properties": {}, "geometry": gj}]
+
+        features = []
+        positions = 0
+        for feature in raw_features[:max_features]:
+            if not isinstance(feature, dict):
+                continue
+            geom = feature.get("geometry")
+            if not isinstance(geom, dict) or geom.get("type") not in _ANNOTATION_GEOM_TYPES:
+                continue
+            count = _count_positions(geom.get("coordinates"))
+            if count <= 0:
+                continue
+            positions += count
+            if positions > max_positions:
+                return None, "Boundary notes were ignored because the drawing was too large."
+
+            props = feature.get("properties") if isinstance(feature.get("properties"), dict) else {}
+            color = props.get("color")
+            clean_props = {"color": color} if isinstance(color, str) and _HEX_COLOR.fullmatch(color) else {}
+            features.append({"type": "Feature", "properties": clean_props, "geometry": geom})
+
+        if not features:
+            return None, ""
+        return {"type": "FeatureCollection", "features": features}, ""
+    except Exception as exc:
+        return None, f"Boundary notes were ignored because they could not be parsed: {exc}"
+
+
 def _kml_ring(ring) -> str:
     return " ".join(f"{x},{y},0" for x, y in ring.coords)
 
@@ -197,15 +259,84 @@ def _kml_polygon(poly) -> str:
     )
 
 
-def geometry_to_kml(geom4326: BaseGeometry, name: str = "boundary") -> str:
-    """Serialize a WGS84 Polygon/MultiPolygon to a KML (XML) document string."""
+def _kml_color(hex_color: str) -> str:
+    value = hex_color if isinstance(hex_color, str) and _HEX_COLOR.fullmatch(hex_color) else "#e6194b"
+    return "ff" + value[5:7] + value[3:5] + value[1:3]
+
+
+def _kml_coord(position: Any) -> Optional[str]:
+    if not isinstance(position, list) or len(position) < 2:
+        return None
+    try:
+        return f"{float(position[0])},{float(position[1])},0"
+    except (TypeError, ValueError):
+        return None
+
+
+def _kml_coord_list(positions: Any) -> str:
+    if not isinstance(positions, list):
+        return ""
+    return " ".join(coord for coord in (_kml_coord(pos) for pos in positions) if coord)
+
+
+def _annotation_geometry_to_kml(geom: dict) -> str:
+    gtype = geom.get("type")
+    coords = geom.get("coordinates")
+    if gtype == "Point":
+        coord = _kml_coord(coords)
+        return f"<Point><coordinates>{coord}</coordinates></Point>" if coord else ""
+    if gtype == "MultiPoint":
+        parts = []
+        for point in coords or []:
+            coord = _kml_coord(point)
+            if coord:
+                parts.append(f"<Point><coordinates>{coord}</coordinates></Point>")
+        return "<MultiGeometry>" + "".join(parts) + "</MultiGeometry>" if parts else ""
+    if gtype == "LineString":
+        coord_text = _kml_coord_list(coords)
+        return f"<LineString><coordinates>{coord_text}</coordinates></LineString>" if coord_text else ""
+    if gtype == "MultiLineString":
+        parts = []
+        for line in coords or []:
+            coord_text = _kml_coord_list(line)
+            if coord_text:
+                parts.append(f"<LineString><coordinates>{coord_text}</coordinates></LineString>")
+        return "<MultiGeometry>" + "".join(parts) + "</MultiGeometry>" if parts else ""
+    return ""
+
+
+def _annotations_to_kml(annotations: Any) -> Tuple[str, str]:
+    normalized, _ = normalize_annotation_geojson(annotations)
+    if not normalized:
+        return "", ""
+    styles = []
+    placemarks = []
+    for idx, feature in enumerate(normalized.get("features", []), start=1):
+        props = feature.get("properties") or {}
+        style_id = f"note{idx}"
+        styles.append(
+            f'<Style id="{style_id}"><LineStyle><color>{_kml_color(props.get("color"))}</color>'
+            "<width>4</width></LineStyle><IconStyle><scale>0.9</scale></IconStyle></Style>"
+        )
+        body = _annotation_geometry_to_kml(feature.get("geometry") or {})
+        if body:
+            placemarks.append(
+                f'<Placemark><name>Note {idx}</name><styleUrl>#{style_id}</styleUrl>{body}</Placemark>'
+            )
+    return "".join(styles), "".join(placemarks)
+
+
+def geometry_to_kml(geom4326: BaseGeometry, name: str = "boundary", annotations: Any = None) -> str:
+    """Serialize a WGS84 Polygon/MultiPolygon and optional notes to KML."""
     if geom4326.geom_type == "MultiPolygon":
         body = "<MultiGeometry>" + "".join(_kml_polygon(p) for p in geom4326.geoms) + "</MultiGeometry>"
     else:
         body = _kml_polygon(geom4326)
     safe_name = escape(str(name or "boundary"))
+    styles, annotation_marks = _annotations_to_kml(annotations)
     return (
         '<?xml version="1.0" encoding="UTF-8"?>\n'
-        '<kml xmlns="http://www.opengis.net/kml/2.2"><Document><Placemark>'
-        f"<name>{safe_name}</name>{body}</Placemark></Document></kml>"
+        '<kml xmlns="http://www.opengis.net/kml/2.2"><Document>'
+        f"<name>{safe_name}</name>{styles}<Placemark><name>Field boundary</name>{body}</Placemark>"
+        f"{annotation_marks}</Document></kml>"
     )

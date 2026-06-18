@@ -227,11 +227,11 @@ def boundary_kml(
             content=f'<?xml version="1.0" encoding="UTF-8"?>\n<error>{escape(msg)}</error>',
             media_type="application/xml", status_code=403,
         )
-    geom, _, _ = boundary_mod.load_stored_geometry(lead_id, _store)
+    geom, _, record = boundary_mod.load_stored_geometry(lead_id, _store)
     if geom is None:
-        geom, _, _ = boundary_mod.load_database_geometry(lead_id, settings)
+        geom, _, record = boundary_mod.load_database_geometry(lead_id, settings)
     if geom is None:
-        geom, _, _ = boundary_mod.find_boundary_via_appsheet(lead_id, settings)
+        geom, _, record = boundary_mod.find_boundary_via_appsheet(lead_id, settings)
     if geom is None:
         return Response(
             content=(
@@ -241,7 +241,11 @@ def boundary_kml(
             media_type="application/xml", status_code=404,
         )
     return Response(
-        content=geo.geometry_to_kml(geom, lead_id),
+        content=geo.geometry_to_kml(
+            geom,
+            lead_id,
+            annotations=(record or {}).get("BoundaryAnnotationsGeoJSON"),
+        ),
         media_type="application/vnd.google-earth.kml+xml",
         headers={"Content-Disposition": f'attachment; filename="{_kml_filename(lead_id)}"'},
     )

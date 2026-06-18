@@ -34,6 +34,25 @@ def _safe_lead_id(value: Any) -> Optional[str]:
     return lead_id if _SAFE_LEAD_ID.fullmatch(lead_id) else None
 
 
+def _notes_for_annotations(annotations: Any) -> Optional[str]:
+    if not annotations:
+        return None
+    return json.dumps({"BoundaryAnnotationsGeoJSON": annotations}, separators=(",", ":"))
+
+
+def _annotations_from_notes(notes: Any) -> Optional[dict]:
+    if not notes:
+        return None
+    try:
+        value = json.loads(notes) if isinstance(notes, str) else notes
+    except Exception:
+        return None
+    if not isinstance(value, dict):
+        return None
+    annotations, _ = geo.normalize_annotation_geojson(value.get("BoundaryAnnotationsGeoJSON"))
+    return annotations
+
+
 class BoundaryStore:
     """Tiny thread-safe JSON-file store: {lead_id: boundary_record}."""
 
@@ -87,6 +106,12 @@ def save_boundary(req: Dict[str, Any], settings: Settings, store: BoundaryStore)
     if geom_warning:
         warnings.append(geom_warning)
 
+    annotations, annotation_warning = geo.normalize_annotation_geojson(
+        req.get("BoundaryAnnotationsGeoJSON")
+    )
+    if annotation_warning:
+        warnings.append(annotation_warning)
+
     acres = geo.calculate_area_acres(geom, settings.area_crs, warnings)
     clat, clng = geo.calculate_centroid(geom)
 
@@ -101,6 +126,8 @@ def save_boundary(req: Dict[str, Any], settings: Settings, store: BoundaryStore)
         "GeometryValid": True,
         "GeometryWarning": "; ".join(warnings),
     }
+    if annotations:
+        record["BoundaryAnnotationsGeoJSON"] = annotations
     store.put(lead_id, record)
 
     db_saved = _save_boundary_to_postgis(record, settings)
@@ -177,7 +204,8 @@ def load_database_geometry(lead_id: str, settings: Settings):
                     boundary_centroid_lat,
                     boundary_centroid_lng,
                     geometry_valid,
-                    geometry_warning
+                    geometry_warning,
+                    notes
                 FROM field_boundaries
                 WHERE lead_id = :lead_id
                   AND COALESCE(geometry_valid, true) = true
@@ -215,6 +243,7 @@ def load_database_geometry(lead_id: str, settings: Settings):
         "BoundaryCentroidLng": record.get("boundary_centroid_lng"),
         "GeometryValid": record.get("geometry_valid"),
         "GeometryWarning": record.get("geometry_warning"),
+        "BoundaryAnnotationsGeoJSON": _annotations_from_notes(record.get("notes")),
     }
 
 
@@ -263,14 +292,14 @@ def _save_boundary_to_postgis(record: Dict[str, Any], settings: Settings) -> boo
                     boundary_geojson, boundary_wkt, boundary_area_acres,
                     boundary_centroid_lat, boundary_centroid_lng,
                     boundary_confidence, geometry_valid, geometry_warning,
-                    geom
+                    notes, geom
                 )
                 VALUES (
                     :boundary_id, :lead_id, :source,
                     :geojson, :wkt, :acres,
                     :centroid_lat, :centroid_lng,
                     'Rough sales boundary', :valid, :warning,
-                    ST_Transform(ST_GeomFromText(:wkt, :input_crs), :projected_crs)
+                    :notes, ST_Transform(ST_GeomFromText(:wkt, :input_crs), :projected_crs)
                 )
                 ON CONFLICT (boundary_id) DO UPDATE SET
                     created_at = now(),
@@ -283,6 +312,7 @@ def _save_boundary_to_postgis(record: Dict[str, Any], settings: Settings) -> boo
                     boundary_confidence = EXCLUDED.boundary_confidence,
                     geometry_valid = EXCLUDED.geometry_valid,
                     geometry_warning = EXCLUDED.geometry_warning,
+                    notes = EXCLUDED.notes,
                     geom = EXCLUDED.geom
                 """
             ), {
@@ -296,6 +326,7 @@ def _save_boundary_to_postgis(record: Dict[str, Any], settings: Settings) -> boo
                 "centroid_lng": record.get("BoundaryCentroidLng"),
                 "valid": record.get("GeometryValid"),
                 "warning": record.get("GeometryWarning"),
+                "notes": _notes_for_annotations(record.get("BoundaryAnnotationsGeoJSON")),
                 "input_crs": settings.input_crs,
                 "projected_crs": settings.projected_crs,
             })
@@ -325,7 +356,14 @@ def find_boundary_via_appsheet(lead_id: str, settings: Settings):
             continue
         geom, valid, _ = geo.validate_geojson_polygon(gj)
         if valid:
-            return geom, row.get("BoundarySource", "Sales drawn boundary"), row
+            record = dict(row)
+            annotations = record.get("BoundaryAnnotationsGeoJSON")
+            if not annotations:
+                annotations = _annotations_from_notes(record.get("Notes"))
+            annotations, _ = geo.normalize_annotation_geojson(annotations)
+            if annotations:
+                record["BoundaryAnnotationsGeoJSON"] = annotations
+            return geom, row.get("BoundarySource", "Sales drawn boundary"), record
     return None, None, None
 
 
@@ -380,6 +418,7 @@ def _maybe_push_to_appsheet(record: Dict[str, Any], settings: Settings) -> bool:
             "BoundaryConfidence": "Rough sales boundary",
             "GeometryValid": record.get("GeometryValid"),
             "GeometryWarning": record.get("GeometryWarning"),
+            "Notes": _notes_for_annotations(record.get("BoundaryAnnotationsGeoJSON")) or "",
         }
         if not _appsheet_action(settings, "Field_Boundaries", "Add", [boundary_row], raise_errors=False):
             _appsheet_action(settings, "Field_Boundaries", "Edit", [boundary_row])

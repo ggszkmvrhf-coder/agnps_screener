@@ -42,6 +42,7 @@ class LeadProcessRequest(BaseModel):
 class BoundarySaveRequest(BaseModel):
     LeadID: str
     BoundaryGeoJSON: Any
+    BoundaryAnnotationsGeoJSON: Optional[Any] = None
     BoundarySource: str = "Sales drawn boundary"
 
     model_config = {"extra": "ignore"}

@@ -3,8 +3,8 @@
  * The POLYGON is the field/problem boundary — it's the only thing sent to the
  * backend and the only thing that feeds the screening score.
  * The colored LINES / MARKERS are annotations ("points of interest"): they are
- * exported in the downloaded KML but are NEVER sent to the backend, so they do
- * not affect any calculation.
+ * saved separately from the boundary so they can appear in KML, but never feed
+ * any calculation.
  *
  * URL params: lead_id (required), lat, lng, backend_url (optional), key (optional)
  */
@@ -317,7 +317,21 @@
     showStatus("KML downloaded (boundary + notes).", "success");
   });
 
-  /* ---------------- Save (boundary polygon only) ---------------- */
+  function annotationsToGeoJSON() {
+    var features = [];
+    annotations.eachLayer(function (layer) {
+      if (!layer.toGeoJSON) return;
+      var feature = layer.toGeoJSON();
+      feature.properties = feature.properties || {};
+      if (layer.options && layer.options.color) {
+        feature.properties.color = layer.options.color;
+      }
+      features.push(feature);
+    });
+    return { type: "FeatureCollection", features: features };
+  }
+
+  /* ---------------- Save (boundary polygon + separate notes) ---------------- */
   saveBtn.addEventListener("click", function () {
     if (!leadId) { showStatus("Missing lead_id in the link.", "error"); return; }
     var layers = drawn.getLayers();
@@ -328,6 +342,7 @@
 
     var headers = { "Content-Type": "application/json" };
     if (apiKey) headers["X-API-Key"] = apiKey;
+    var noteGeoJSON = annotationsToGeoJSON();
 
     fetch(backendUrl + "/save-boundary", {
       method: "POST",
@@ -335,7 +350,8 @@
       body: JSON.stringify({
         LeadID: leadId,
         BoundarySource: "Sales drawn boundary",
-        BoundaryGeoJSON: layers[0].toGeoJSON(), // only the polygon — annotations excluded
+        BoundaryGeoJSON: layers[0].toGeoJSON(),
+        BoundaryAnnotationsGeoJSON: noteGeoJSON.features.length ? noteGeoJSON : null,
       }),
     })
       .then(function (r) { return r.json().then(function (b) { return { ok: r.ok, body: b }; }); })
