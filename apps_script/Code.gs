@@ -329,19 +329,32 @@ function ensureDrawUrls_() {
     var drawUrlCol = headers.indexOf('BoundaryDrawURL');
     var latCol = headers.indexOf('GPSLatitude');
     var lngCol = headers.indexOf('GPSLongitude');
+    var plocCol = headers.indexOf('ProblemLocation');
     if (leadIdCol < 0 || drawUrlCol < 0) return;
 
     for (var i = 1; i < data.length; i++) {
       var leadId = data[i][leadIdCol];
       var existingUrl = data[i][drawUrlCol];
-      // SECURITY-FIX-10: Regenerate any URL that isn't already a token URL.
-      // AppSheet pre-fills this column with an old ?key= URL on lead creation;
-      // we must overwrite those (skip only if no LeadID, or already a token URL).
       if (!leadId) continue;
-      if (existingUrl && String(existingUrl).indexOf('token=') !== -1) continue;
 
       var lat = latCol >= 0 ? data[i][latCol] : '';
       var lng = lngCol >= 0 ? data[i][lngCol] : '';
+      // Fall back to ProblemLocation ("lat, lng") when the GPS columns are empty.
+      // This matches the old AppSheet LAT()/LONG([ProblemLocation]) behavior so the
+      // draw page can drop the pin and zoom to the reported problem location.
+      if (lat === '' || lat === null || lng === '' || lng === null) {
+        var ploc = plocCol >= 0 ? String(data[i][plocCol] || '') : '';
+        var m = ploc.match(/(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)/);
+        if (m) { lat = m[1]; lng = m[2]; }
+      }
+      var hasLocation = (lat !== '' && lat !== null && lng !== '' && lng !== null);
+
+      // SECURITY-FIX-10: Regenerate old ?key= URLs (no token). Also regenerate
+      // token URLs that are missing the lat= param but have a location to add
+      // (these were built before the ProblemLocation fallback existed).
+      var isToken = existingUrl && String(existingUrl).indexOf('token=') !== -1;
+      var hasLatParam = existingUrl && String(existingUrl).indexOf('lat=') !== -1;
+      if (isToken && (hasLatParam || !hasLocation)) continue;
 
       var payload = JSON.stringify({
         lead_id: String(leadId),
