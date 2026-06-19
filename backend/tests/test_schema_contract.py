@@ -125,13 +125,9 @@ def test_csv_contains_all_required_headers(sheet_name):
 
     assert not missing_from_csv, (
         f"Sheet '{sheet_name}': the following columns are listed in "
-        f"Code.gs REQUIRED_HEADERS but are MISSING from {csv_filename}:
-"
-        + "
-".join(f"  - {col}" for col in missing_from_csv)
-        + "
-
-Both Code.gs REQUIRED_HEADERS and the CSV must be updated together."
+        f"Code.gs REQUIRED_HEADERS but are MISSING from {csv_filename}:\n"
+        + "\n".join(f"  - {col}" for col in missing_from_csv)
+        + "\n\nBoth Code.gs REQUIRED_HEADERS and the CSV must be updated together."
     )
 
 
@@ -161,12 +157,9 @@ def test_no_extra_csv_headers_undocumented(sheet_name):
     # This test always passes but prints findings for human review.
     if extra_in_csv:
         print(
-            f"
-INFO — Sheet '{sheet_name}': {len(extra_in_csv)} CSV column(s) "
-            f"not in REQUIRED_HEADERS (optional / undocumented in runtime contract):
-"
-            + "
-".join(f"  + {col}" for col in extra_in_csv)
+            f"\nINFO — Sheet '{sheet_name}': {len(extra_in_csv)} CSV column(s) "
+            f"not in REQUIRED_HEADERS (optional / undocumented in runtime contract):\n"
+            + "\n".join(f"  + {col}" for col in extra_in_csv)
         )
     # Not a hard failure — extra CSV columns are permitted.
     assert True
