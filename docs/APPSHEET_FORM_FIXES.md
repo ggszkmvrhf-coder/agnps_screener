@@ -21,7 +21,7 @@ which fields the New Lead form shows.
       EstimatedFarmerCostLow/High, EstimatedCompanyRevenue, ReportURL, NextAction.
 - [ ] 8. **Remove Required** from every backend/output field (a required hidden field blocks Save).
       Required stays ON only for: CustomerName, ProblemType, ProblemDescription, ProblemLocation,
-      FarmerInterestedInCostShare, PermissionToShareWithSWCD, Urgency.
+      FarmerInterestedInCostShare, Urgency.
 - [ ] 9. **Make score/calculation/report fields read-only** — `Editable_If = FALSE` for
       CandidateScore, CandidateClass, GISConfidence, all Estimated* fields, ReportURL,
       NextAction, BoundaryStatus, BoundarySource, BoundaryAreaAcres, BoundaryDrawURL, Status.
@@ -42,7 +42,7 @@ which fields the New Lead form shows.
 - [ ] 11. Create/edit a **Form** view named **New Lead** on table **Leads**.
 - [ ] 12. In the view’s **Column order / Include**, keep ONLY:
       CustomerName, FarmName, FieldName, ProblemType, ProblemDescription, ProblemLocation,
-      FarmerInterestedInCostShare, PermissionToShareWithSWCD, Urgency, EstimatedProjectCost,
+      FarmerInterestedInCostShare, Urgency, EstimatedProjectCost,
       InternalNotes. *(Optional: related Photos inline after save.)*
 - [ ] 13. Confirm no system field shows in the form preview.
 

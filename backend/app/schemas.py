@@ -32,7 +32,6 @@ class LeadProcessRequest(BaseModel):
     EstimatedCompanyGrossMarginPercent: Optional[float] = None
     # Intake flags used for scoring.
     FarmerInterestedInCostShare: Optional[Any] = None
-    PermissionToShareWithSWCD: Optional[Any] = None
     Photos: Optional[Any] = None
     PhotoCount: Optional[Any] = None
 

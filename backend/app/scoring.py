@@ -94,9 +94,9 @@ def _documentation(lead: Dict[str, Any], geom_kind: str) -> Tuple[int, List[str]
     if geom_kind == "boundary":
         pts += 2
         notes.append("Boundary drawn/uploaded (+2)")
-    if lead.get("FarmerInterestedInCostShare") not in (None, "") or lead.get("PermissionToShareWithSWCD") not in (None, ""):
+    if lead.get("FarmerInterestedInCostShare") not in (None, ""):
         pts += 2
-        notes.append("Farmer interest / SWCD permission known (+2)")
+        notes.append("Farmer interest known (+2)")
     return min(pts, 10), notes
 
 
@@ -136,8 +136,6 @@ def _missing_info(lead: Dict[str, Any], facts: Dict[str, Any], geom_kind: str) -
         missing.append("No field boundary -- only a GPS point + buffer was used.")
     if not (lead.get("Photos") or lead.get("PhotoCount")):
         missing.append("No photos attached.")
-    if lead.get("PermissionToShareWithSWCD") in (None, ""):
-        missing.append("SWCD-sharing permission not recorded.")
     if facts.get("NearestWaterbodyName") is None and facts.get("DistanceToWaterbodyFt") is None:
         missing.append("No mapped waterbody connection established.")
     if facts.get("MeanSlopePercent") is None:

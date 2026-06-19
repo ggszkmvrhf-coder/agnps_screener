@@ -9,7 +9,7 @@ APPSHEET_SETUP.md) **and** by limiting each view’s included columns.
 ### 1. New Lead — Form
 - Table: **Leads**, View type: **Form**.
 - Include ONLY: CustomerName, FarmName, FieldName, ProblemType, ProblemDescription,
-  ProblemLocation, FarmerInterestedInCostShare, PermissionToShareWithSWCD, Urgency,
+  ProblemLocation, FarmerInterestedInCostShare, Urgency,
   EstimatedProjectCost, InternalNotes.
 - Optional: related **Photos** inline table after the lead is saved.
 - No system/backend fields appear here.

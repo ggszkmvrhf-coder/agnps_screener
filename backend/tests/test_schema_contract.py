@@ -34,7 +34,7 @@ REQUIRED_HEADERS = {
         "CustomerName", "FarmName", "FieldName", "ProblemType", "ProblemDescription",
         "ProblemLocation", "GPSLatitude", "GPSLongitude", "BoundaryStatus",
         "BoundarySource", "BoundaryAreaAcres", "BoundaryDrawURL", "BoundaryShareURL",
-        "FarmerInterestedInCostShare", "PermissionToShareWithSWCD", "Urgency",
+        "FarmerInterestedInCostShare", "Urgency",
         "SendToDesignTeam", "Status", "CandidateScore", "CandidateClass",
         "GISConfidence", "EstimatedProjectCost", "EstimatedCostShareLow",
         "EstimatedCostShareHigh", "EstimatedFarmerCostLow", "EstimatedFarmerCostHigh",

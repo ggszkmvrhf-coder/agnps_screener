@@ -40,7 +40,7 @@ const REQUIRED_HEADERS = {
     'CustomerName', 'FarmName', 'FieldName', 'ProblemType', 'ProblemDescription',
     'ProblemLocation', 'GPSLatitude', 'GPSLongitude', 'BoundaryStatus',
     'BoundarySource', 'BoundaryAreaAcres', 'BoundaryDrawURL', 'BoundaryShareURL',
-    'FarmerInterestedInCostShare', 'PermissionToShareWithSWCD', 'Urgency',
+    'FarmerInterestedInCostShare', 'Urgency',
     'SendToDesignTeam', 'Status', 'CandidateScore', 'CandidateClass',
     'GISConfidence', 'EstimatedProjectCost', 'EstimatedCostShareLow',
     'EstimatedCostShareHigh', 'EstimatedFarmerCostLow', 'EstimatedFarmerCostHigh',
@@ -84,7 +84,7 @@ function setUpTrigger() {
   });
   ScriptApp.newTrigger('processLeads').timeBased().everyMinutes(5).create();
   // SECURITY-FIX-10: Back-fill BoundaryDrawURL for leads that lack one.
-  ScriptApp.newTrigger('ensureDrawUrls_').timeBased().everyMinutes(10).create();
+  ScriptApp.newTrigger('ensureDrawUrls_').timeBased().everyMinutes(5).create();
 }
 
 function onOpen() {
@@ -172,7 +172,6 @@ function buildPayload_(row, col, boundaryGeoJSON) {
     GPSLongitude: toNum_(get_(row, col, 'GPSLongitude')),
     EstimatedProjectCost: toNum_(get_(row, col, 'EstimatedProjectCost')),
     FarmerInterestedInCostShare: get_(row, col, 'FarmerInterestedInCostShare'),
-    PermissionToShareWithSWCD: get_(row, col, 'PermissionToShareWithSWCD'),
   };
   if (boundaryGeoJSON) {
     try { payload.BoundaryGeoJSON = JSON.parse(boundaryGeoJSON); }
@@ -295,6 +294,12 @@ function upsertCalculation_(ss, leadId, calc) {
  *
  * Runs every 10 minutes via the trigger created by setUpTrigger().
  */
+// Public wrapper so ensureDrawUrls_ (private, trailing underscore) can be run
+// manually from the Apps Script editor Run dropdown for testing/back-fill.
+function runEnsureDrawUrls() {
+  ensureDrawUrls_();
+}
+
 function ensureDrawUrls_() {
   var lock = LockService.getScriptLock();
   if (!lock.tryLock(10000)) return;
@@ -329,7 +334,11 @@ function ensureDrawUrls_() {
     for (var i = 1; i < data.length; i++) {
       var leadId = data[i][leadIdCol];
       var existingUrl = data[i][drawUrlCol];
-      if (!leadId || existingUrl) continue;  // skip if no LeadID or URL already set
+      // SECURITY-FIX-10: Regenerate any URL that isn't already a token URL.
+      // AppSheet pre-fills this column with an old ?key= URL on lead creation;
+      // we must overwrite those (skip only if no LeadID, or already a token URL).
+      if (!leadId) continue;
+      if (existingUrl && String(existingUrl).indexOf('token=') !== -1) continue;
 
       var lat = latCol >= 0 ? data[i][latCol] : '';
       var lng = lngCol >= 0 ? data[i][lngCol] : '';

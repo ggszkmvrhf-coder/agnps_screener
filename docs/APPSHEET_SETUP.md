@@ -26,7 +26,7 @@ Sheet, then **Data → Add Table** for the rest.
 
 ## 2. New Lead form — show ONLY these fields
 CustomerName · FarmName · FieldName · ProblemType · ProblemDescription ·
-ProblemLocation · FarmerInterestedInCostShare · PermissionToShareWithSWCD ·
+ProblemLocation · FarmerInterestedInCostShare ·
 Urgency · EstimatedProjectCost · InternalNotes
 *(optional)* a related **Photos** inline table shown after the lead is saved.
 
@@ -99,7 +99,6 @@ CONCATENATE(
 | ProblemType | Enum | — | **TRUE** |
 | ProblemDescription | LongText | — | **TRUE** |
 | FarmerInterestedInCostShare | Enum | — | **TRUE** |
-| PermissionToShareWithSWCD | Enum | — | **TRUE** |
 | Urgency | Enum | — | **TRUE** |
 | FarmName | Text | — | FALSE |
 | FieldName | Text | — | FALSE |
@@ -107,7 +106,7 @@ CONCATENATE(
 | InternalNotes | LongText | — | FALSE |
 
 **Required = only:** CustomerName, ProblemType, ProblemDescription,
-ProblemLocation, FarmerInterestedInCostShare, PermissionToShareWithSWCD, Urgency.
+ProblemLocation, FarmerInterestedInCostShare, Urgency.
 Make sure **no backend/output field is marked Required** (a required hidden field
 blocks the rep from saving).
 
