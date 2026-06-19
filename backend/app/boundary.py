@@ -23,7 +23,9 @@ from sqlalchemy import text
 from .database import database_reachable, get_engine, table_exists
 from . import geometry_utils as geo
 from .settings import Settings
+from .appsheet_client import _appsheet_action, _appsheet_find, _appsheet_response_has_error  # AGENT-L2
 
+# AGENT-L3: Log messages include lead_id= prefix for traceability.
 logger = logging.getLogger(__name__)
 _lock = threading.Lock()
 _SAFE_LEAD_ID = re.compile(r"^[A-Za-z0-9_-]+$")
@@ -136,6 +138,18 @@ def save_boundary(req: Dict[str, Any], settings: Settings, store: BoundaryStore)
         settings.database_url or (settings.appsheet_app_id and settings.appsheet_api_key)
     )
 
+    # AGENT-M5: CachedKML stored after successful durable write. /boundary endpoint uses this to skip AppSheet read.
+    if db_saved or pushed:
+        try:
+            record["CachedKML"] = geo.geometry_to_kml(
+                geom,
+                lead_id,
+                annotations=record.get("BoundaryAnnotationsGeoJSON"),
+            )
+            store.put(lead_id, record)
+        except Exception as _kml_exc:
+            logger.warning("lead_id=%s Could not cache KML: %s", lead_id, _kml_exc)
+
     msg = f"Boundary saved. Approximate area: {acres} acres." if acres is not None \
         else "Boundary saved (acreage unavailable)."
     if db_saved:
@@ -158,7 +172,16 @@ def save_boundary(req: Dict[str, Any], settings: Settings, store: BoundaryStore)
             "warnings": warnings,
         }
     else:
-        msg += " Return to AppSheet and sync; processing will use the backend cache."
+        # AGENT-C1: No durable storage = success: False. Cache write still happens for within-session use, but caller must not treat this as a confirmed save.
+        return {
+            "success": False,
+            "LeadID": lead_id,
+            "BoundaryAreaAcres": 0.0,
+            "BoundaryCentroidLat": None,
+            "BoundaryCentroidLng": None,
+            "message": "No durable storage is configured. Set DATABASE_URL or both APPSHEET_APP_ID and APPSHEET_API_KEY in the Render environment. The boundary was NOT saved durably.",
+            "warnings": ["Boundary not saved: no durable storage backend is configured."],
+        }
 
     return {
         "success": True,
@@ -214,7 +237,7 @@ def load_database_geometry(lead_id: str, settings: Settings):
                 """
             ), {"lead_id": lead_id}).mappings().first()
     except Exception as exc:
-        logger.warning("Could not load boundary from PostGIS: %s", exc)
+        logger.warning("lead_id=%s Could not load boundary from PostGIS: %s", lead_id, exc)
         return None, None, None
 
     if not row:
@@ -332,7 +355,7 @@ def _save_boundary_to_postgis(record: Dict[str, Any], settings: Settings) -> boo
             })
         return True
     except Exception as exc:
-        logger.warning("Could not persist boundary to PostGIS: %s", exc)
+        logger.warning("lead_id=%s Could not persist boundary to PostGIS: %s", lead_id, exc)
         return False
 
 
@@ -367,35 +390,49 @@ def find_boundary_via_appsheet(lead_id: str, settings: Settings):
     return None, None, None
 
 
-def _appsheet_find(settings: Settings, table: str, selector: str) -> list:
-    """Run an AppSheet API 'Find' action and return the matching rows."""
-    import urllib.error
-    import urllib.request
-
-    host = "api.eu.appsheet.com" if settings.appsheet_region == "eu" else "api.appsheet.com"
-    url = f"https://{host}/api/v2/apps/{settings.appsheet_app_id}/tables/{table}/Action"
-    body = json.dumps({
-        "Action": "Find",
-        "Properties": {"Selector": selector},
-        "Rows": [],
-    }).encode("utf-8")
-    request = urllib.request.Request(
-        url, data=body,
-        headers={"ApplicationAccessKey": settings.appsheet_api_key, "Content-Type": "application/json"},
-    )
-    try:
-        raw = urllib.request.urlopen(request, timeout=12).read()
-        data = json.loads(raw or b"[]")
-        return data.get("Rows", []) if isinstance(data, dict) else (data or [])
-    except Exception as exc:
-        logger.warning("AppSheet Find failed: %s", exc)
-        return []
-
-
+# AGENT-H2: Field_Boundaries written first (durable GeoJSON). Leads written second (status). Failure in either step returns False without partial state.
 def _maybe_push_to_appsheet(record: Dict[str, Any], settings: Settings) -> bool:
-    """Optional immediate update of AppSheet. Returns True if all pushes worked."""
+    """Optional immediate update of AppSheet. Returns True if all pushes worked.
+
+    Write order: Field_Boundaries first (durable GeoJSON record), Leads second
+    (status update). If Field_Boundaries fails we return False immediately and
+    never touch Leads, preventing the corrupted state where Leads shows
+    BoundaryStatus=Drawn but no GeoJSON row exists in Field_Boundaries.
+    If Leads fails after a successful Field_Boundaries write we still return
+    False — the boundary data is safe and a re-save will retry both writes.
+    """
     if not (settings.appsheet_app_id and settings.appsheet_api_key):
         return False
+
+    # --- Step 1: Write Field_Boundaries (durable GeoJSON record) ---
+    boundary_id = f"{record['LeadID']}-sales-drawn"
+    boundary_row = {
+        "BoundaryID": boundary_id,
+        "LeadID": record["LeadID"],
+        "CreatedAt": datetime.now(timezone.utc).isoformat(),
+        "BoundarySource": record.get("BoundarySource"),
+        "BoundaryGeoJSON": json.dumps(record.get("BoundaryGeoJSON")),
+        "BoundaryWKT": record.get("BoundaryWKT"),
+        "BoundaryAreaAcres": record.get("BoundaryAreaAcres"),
+        "BoundaryCentroidLat": record.get("BoundaryCentroidLat"),
+        "BoundaryCentroidLng": record.get("BoundaryCentroidLng"),
+        "BoundaryConfidence": "Rough sales boundary",
+        "GeometryValid": record.get("GeometryValid"),
+        "GeometryWarning": record.get("GeometryWarning"),
+        "Notes": _notes_for_annotations(record.get("BoundaryAnnotationsGeoJSON")) or "",
+    }
+    try:
+        if not _appsheet_action(settings, "Field_Boundaries", "Add", [boundary_row], raise_errors=False):
+            _appsheet_action(settings, "Field_Boundaries", "Edit", [boundary_row])
+    except Exception as exc:
+        logger.warning(
+            "lead_id=%s AppSheet push failed at Field_Boundaries step — Leads NOT updated to avoid partial state: %s",
+            record["LeadID"],
+            exc,
+        )
+        return False
+
+    # --- Step 2: Write Leads (status update — only reached if Field_Boundaries succeeded) ---
     try:
         _appsheet_action(settings, "Leads", "Edit", [{
             "LeadID": record["LeadID"],
@@ -403,89 +440,14 @@ def _maybe_push_to_appsheet(record: Dict[str, Any], settings: Settings) -> bool:
             "BoundarySource": record.get("BoundarySource"),
             "BoundaryAreaAcres": record.get("BoundaryAreaAcres"),
         }])
-
-        boundary_id = f"{record['LeadID']}-sales-drawn"
-        boundary_row = {
-            "BoundaryID": boundary_id,
-            "LeadID": record["LeadID"],
-            "CreatedAt": datetime.now(timezone.utc).isoformat(),
-            "BoundarySource": record.get("BoundarySource"),
-            "BoundaryGeoJSON": json.dumps(record.get("BoundaryGeoJSON")),
-            "BoundaryWKT": record.get("BoundaryWKT"),
-            "BoundaryAreaAcres": record.get("BoundaryAreaAcres"),
-            "BoundaryCentroidLat": record.get("BoundaryCentroidLat"),
-            "BoundaryCentroidLng": record.get("BoundaryCentroidLng"),
-            "BoundaryConfidence": "Rough sales boundary",
-            "GeometryValid": record.get("GeometryValid"),
-            "GeometryWarning": record.get("GeometryWarning"),
-            "Notes": _notes_for_annotations(record.get("BoundaryAnnotationsGeoJSON")) or "",
-        }
-        if not _appsheet_action(settings, "Field_Boundaries", "Add", [boundary_row], raise_errors=False):
-            _appsheet_action(settings, "Field_Boundaries", "Edit", [boundary_row])
-        return True
     except Exception as exc:
-        logger.warning("AppSheet push failed (will reconcile via Apps Script): %s", exc)
+        logger.warning(
+            "lead_id=%s AppSheet push failed at Leads step (Field_Boundaries already written — boundary data is safe, status is stale): %s",
+            record["LeadID"],
+            exc,
+        )
         return False
 
-
-def _appsheet_action(
-    settings: Settings,
-    table: str,
-    action: str,
-    rows: list,
-    raise_errors: bool = True,
-) -> bool:
-    """Send an AppSheet API table action."""
-    import urllib.error
-    import urllib.request
-
-    host = "api.eu.appsheet.com" if settings.appsheet_region == "eu" else "api.appsheet.com"
-    url = f"https://{host}/api/v2/apps/{settings.appsheet_app_id}/tables/{table}/Action"
-    body = json.dumps({
-        "Action": action,
-        "Properties": {},
-        "Rows": rows,
-    }).encode("utf-8")
-    request = urllib.request.Request(
-        url,
-        data=body,
-        headers={
-            "ApplicationAccessKey": settings.appsheet_api_key,
-            "Content-Type": "application/json",
-        },
-    )
-    try:
-        raw = urllib.request.urlopen(request, timeout=10).read()
-        text_body = raw.decode("utf-8", errors="replace").strip()
-        if text_body:
-            try:
-                data = json.loads(text_body)
-            except json.JSONDecodeError:
-                data = None
-            if _appsheet_response_has_error(data):
-                message = f"AppSheet {action} on {table} returned an error: {text_body[:500]}"
-                if raise_errors:
-                    raise RuntimeError(message)
-                logger.warning(message)
-                return False
-        return True
-    except urllib.error.HTTPError as exc:
-        if raise_errors:
-            body = exc.read().decode("utf-8", errors="replace")
-            raise RuntimeError(
-                f"AppSheet {action} on {table} failed with HTTP {exc.code}: {body[:500]}"
-            ) from exc
-        return False
+    return True
 
 
-def _appsheet_response_has_error(data: Any) -> bool:
-    if not isinstance(data, dict):
-        return False
-    status = str(data.get("Status") or data.get("status") or "").strip().lower()
-    if status in ("error", "failed", "failure"):
-        return True
-    for key in ("Errors", "Error", "error", "ErrorMessage", "errorMessage"):
-        value = data.get(key)
-        if value not in (None, "", [], {}):
-            return True
-    return False

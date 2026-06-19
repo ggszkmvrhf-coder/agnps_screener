@@ -10,6 +10,14 @@ services:
     startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
     healthCheckPath: /health
     envVars:
+      # ============================================================
+      # AGENT-C1: DURABLE STORAGE IS REQUIRED
+      # Without one of the following configurations, /save-boundary
+      # will return success: false and boundaries will not be saved.
+      #
+      # Option A (AppSheet): Set APPSHEET_APP_ID + APPSHEET_API_KEY
+      # Option B (PostGIS):  Set DATABASE_URL
+      # ============================================================
       - key: PYTHON_VERSION
         value: "3.12"
       - key: PUBLIC_GIS_LOOKUPS_ENABLED
@@ -23,6 +31,10 @@ services:
       # Optional: require a key on /save-boundary and /process-lead.
       - key: API_KEY
         sync: false
+      - key: SHARE_LINK_SECRET
+        sync: false
+        # Separate HMAC secret for signing KML share URLs. Set to a strong random value.
+        # If not set, falls back to API_KEY (backward compatible but less secure).
       # AppSheet API push keeps drawn boundaries durable without PostGIS.
       - key: APPSHEET_APP_ID
         sync: false

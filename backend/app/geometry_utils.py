@@ -12,6 +12,7 @@ from xml.sax.saxutils import escape
 
 from shapely import wkt as shapely_wkt
 from shapely.geometry import Point, mapping, shape
+from shapely.geometry.polygon import orient
 from shapely.geometry.base import BaseGeometry
 from shapely.ops import transform as shp_transform
 
@@ -111,6 +112,16 @@ def validate_geojson_polygon(gj: Any) -> Tuple[Optional[BaseGeometry], bool, str
             warning = "Polygon had a minor topology issue and was auto-repaired."
         else:
             return None, False, "Polygon geometry is invalid and could not be repaired."
+
+    warnings_list: list = []
+    # AGENT-H5: orient() enforces CCW exterior ring on every saved polygon. C1 agent depends on this being here.
+    geom = orient(geom, sign=1.0)
+    if geom.area > 1.0:
+        warnings_list.append("Boundary area is very large — please verify the polygon is correct.")
+
+    if warnings_list:
+        combined = "; ".join(warnings_list)
+        warning = f"{warning}; {combined}".lstrip("; ") if warning else combined
     return geom, True, warning
 
 

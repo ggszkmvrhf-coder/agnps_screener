@@ -18,6 +18,10 @@
   var lat = parseFloat(param("lat"));
   var lng = parseFloat(param("lng"));
   var backendUrl = (param("backend_url") || window.location.origin).replace(/\/$/, "");
+  // AGENT-H1: API key is sourced from the URL query string (?key=).
+  // This means the key appears in browser history, Render logs, and HTTP referrer headers.
+  // Changing this mechanism requires updating the AppSheet Draw Boundary URL formula — out of scope here.
+  // Operators should rotate API_KEY periodically. SHARE_LINK_SECRET is now separate from this key.
   var apiKey = param("key");
   document.getElementById("lead-id").textContent = leadId || "(missing)";
 

@@ -17,7 +17,8 @@ from urllib.parse import quote
 from .settings import Settings
 
 def _secret(settings: Settings) -> Optional[str]:
-    return settings.api_key
+    # AGENT-H1: Prefer share_link_secret for signing; fall back to api_key for backward compatibility.
+    return settings.share_link_secret or settings.api_key
 
 
 def sign(lead_id: str, exp: int, settings: Settings) -> str:

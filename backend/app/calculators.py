@@ -4,17 +4,18 @@ Every number here is a ROUGH PLANNING ESTIMATE, not a bid and not an awarded
 amount. The cost placeholders live in settings.project_cost_table so the company
 can change them without touching code.
 """
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from .settings import Settings
 
 
+# AGENT-L4: Fixed return type annotation to use Tuple from typing.
 def estimate_project_cost(
     acres: Optional[float],
     problem_type: Optional[str],
     user_cost: Optional[float],
     settings: Settings,
-) -> (float, List[str], List[str]):
+) -> Tuple[float, List[str], List[str]]:
     """Return (cost, assumptions, warnings).
 
     If the user entered a cost, use it. Otherwise estimate from acreage + the

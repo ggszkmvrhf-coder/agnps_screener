@@ -26,6 +26,10 @@ const CONFIG = {
   boundaryDrawn: 'Drawn',
 };
 
+// AGENT-M1: REQUIRED_HEADERS is the authoritative schema contract.
+// Schema version: 1.0
+// Any column rename MUST be updated here AND in schema/*.csv simultaneously.
+// Contract test: backend/tests/test_schema_contract.py verifies these match the CSV files.
 const REQUIRED_HEADERS = {
   Leads: [
     'LeadID', 'CreatedAt', 'UpdatedAt', 'SalesRepEmail', 'SalesRepName',
@@ -119,12 +123,7 @@ function processLeadsLocked_() {
     if (!leadId) continue;
 
     const explicitlySubmitted = status === CONFIG.statusValues.processing;
-    const boundaryReady = boundaryStatus === CONFIG.boundaryDrawn && status !== CONFIG.statusValues.ready;
-    if (!explicitlySubmitted && !boundaryReady) continue;
-
-    if (!explicitlySubmitted) {
-      setCell_(leadsSheet, rowNumber, col, 'Status', CONFIG.statusValues.processing);
-    }
+    if (!explicitlySubmitted) continue;
 
     try {
       const payload = buildPayload_(row, col, boundaries[leadId]);
@@ -192,10 +191,12 @@ function writeResult_(ss, leadsSheet, rowNumber, col, leadId, result) {
   const af = result.AutoFacts || {};
   const calc = result.Calculations || {};
 
-  deleteOutputRows_(ss, leadId);
-  appendAutoFacts_(ss, leadId, af);
-  appendBmpCandidates_(ss, leadId, result.BMPCandidates || []);
-  appendCalculation_(ss, leadId, calc);
+  // Upsert-in-place: overwrite existing rows for this LeadID rather than
+  // delete-then-append. A crash mid-write leaves stale data visible instead of
+  // creating a gap (no recovery path). See upsertSingle_/upsertMulti_.
+  upsertAutoFacts_(ss, leadId, af);
+  upsertBmpCandidates_(ss, leadId, result.BMPCandidates || []);
+  upsertCalculation_(ss, leadId, calc);
 
   setCell_(leadsSheet, rowNumber, col, 'CandidateScore', result.CandidateScore);
   setCell_(leadsSheet, rowNumber, col, 'CandidateClass', result.CandidateClass);
@@ -218,9 +219,10 @@ function writeResult_(ss, leadsSheet, rowNumber, col, leadId, result) {
   if (!ok) appendNote_(leadsSheet, rowNumber, col, 'Processing error: ' + (result.ProcessingError || 'unknown'));
 }
 
-function appendAutoFacts_(ss, leadId, af) {
+function upsertAutoFacts_(ss, leadId, af) {
   const sheet = requireSheet_(ss, CONFIG.sheets.autoFacts);
-  appendByHeader_(sheet, {
+  // ProcessedAt is part of the Auto_Facts schema contract, so set it here.
+  upsertSingle_(sheet, leadId, {
     FactID: leadId + '-' + new Date().getTime(),
     LeadID: leadId, ProcessedAt: new Date(),
     AnalysisGeometrySource: af.AnalysisGeometrySource,
@@ -244,20 +246,23 @@ function appendAutoFacts_(ss, leadId, af) {
   });
 }
 
-function appendBmpCandidates_(ss, leadId, bmps) {
+function upsertBmpCandidates_(ss, leadId, bmps) {
   const sheet = requireSheet_(ss, CONFIG.sheets.bmpCandidates);
-  bmps.forEach(function (b, idx) {
-    appendByHeader_(sheet, {
+  // BMP_Candidates has no ProcessedAt column in REQUIRED_HEADERS; do not add one.
+  const valueMaps = bmps.map(function (b, idx) {
+    return {
       BMPCandidateID: leadId + '-bmp-' + (idx + 1), LeadID: leadId,
       BMPName: b.BMPName, BMPCategory: b.BMPCategory, ReasonSuggested: b.ReasonSuggested,
       Confidence: b.Confidence, NeedsHumanReview: b.NeedsHumanReview, Notes: b.Notes || '',
-    });
+    };
   });
+  upsertMulti_(sheet, leadId, valueMaps);
 }
 
-function appendCalculation_(ss, leadId, calc) {
+function upsertCalculation_(ss, leadId, calc) {
   const sheet = requireSheet_(ss, CONFIG.sheets.calculations);
-  appendByHeader_(sheet, {
+  // Calculations has no ProcessedAt column in REQUIRED_HEADERS; do not add one.
+  upsertSingle_(sheet, leadId, {
     CalculationID: leadId + '-calc-' + new Date().getTime(), LeadID: leadId, CreatedAt: new Date(),
     EstimatedProjectCost: calc.EstimatedProjectCost,
     CostShareLowPercent: calc.CostShareLowPercent, CostShareHighPercent: calc.CostShareHighPercent,
@@ -293,23 +298,85 @@ function requireHeaders_(sheet, required) {
   }
 }
 
-function deleteOutputRows_(ss, leadId) {
-  deleteRowsByLeadId_(requireSheet_(ss, CONFIG.sheets.autoFacts), leadId);
-  deleteRowsByLeadId_(requireSheet_(ss, CONFIG.sheets.bmpCandidates), leadId);
-  deleteRowsByLeadId_(requireSheet_(ss, CONFIG.sheets.calculations), leadId);
+/**
+ * Find the 1-based sheet row numbers whose LeadID column matches leadId.
+ * Returns an ascending array (e.g. [3, 7]). Reads the data range once.
+ */
+function findRowsByLeadId_(sheet, leadId) {
+  if (sheet.getLastRow() < 2) return [];
+  const data = sheet.getDataRange().getValues();
+  const col = indexMap_(data[0]);
+  if (col['LeadID'] === undefined) throw new Error('Sheet ' + sheet.getName() + ' is missing LeadID.');
+  const matches = [];
+  for (let i = 1; i < data.length; i++) {
+    if (String(data[i][col['LeadID']]) === String(leadId)) matches.push(i + 1);
+  }
+  return matches;
 }
 
-function deleteRowsByLeadId_(sheet, leadId) {
-  if (!leadId || sheet.getLastRow() < 2) return;
+/** Build a row array ordered to match the sheet headers from a {header: value} map. */
+function rowFromMap_(sheet, valueMap) {
   const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
-  const col = indexMap_(headers);
-  if (col['LeadID'] === undefined) throw new Error('Sheet ' + sheet.getName() + ' is missing LeadID.');
-  const rows = sheet.getRange(2, 1, sheet.getLastRow() - 1, sheet.getLastColumn()).getValues();
-  for (let i = rows.length - 1; i >= 0; i--) {
-    if (String(rows[i][col['LeadID']]) === String(leadId)) {
-      sheet.deleteRow(i + 2);
-    }
+  return headers.map(function (h) {
+    const k = String(h).trim();
+    return Object.prototype.hasOwnProperty.call(valueMap, k) ? valueMap[k] : '';
+  });
+}
+
+/**
+ * Upsert exactly one row per LeadID. Overwrites the first existing row in place;
+ * appends if none exists. A crash here cannot create a gap: either the existing
+ * row's old values stay visible, or no row existed and the lead simply has no
+ * row yet (same as a never-processed lead).
+ */
+function upsertSingle_(sheet, leadId, valueMap) {
+  const rowArray = rowFromMap_(sheet, valueMap);
+  const matches = findRowsByLeadId_(sheet, leadId);
+  if (matches.length === 0) {
+    sheet.appendRow(rowArray);
+    return;
   }
+  // Overwrite the first match in place.
+  sheet.getRange(matches[0], 1, 1, rowArray.length).setValues([rowArray]);
+  // Remove any surplus duplicate rows AFTER the primary row is written.
+  deleteSurplusRows_(sheet, matches.slice(1));
+}
+
+/**
+ * Upsert multiple rows per LeadID. Existing rows are overwritten in place; extra
+ * new rows are appended; surplus old rows are deleted only AFTER the new data has
+ * been written. A crash partway through leaves a mix of new + stale rows visible
+ * (never a gap), and the surplus-delete is the only remaining delete operation.
+ */
+function upsertMulti_(sheet, leadId, valueMaps) {
+  const matches = findRowsByLeadId_(sheet, leadId);
+  const numCols = sheet.getLastColumn();
+
+  // 1) Overwrite as many existing rows as we have new data for.
+  const overlap = Math.min(matches.length, valueMaps.length);
+  for (let i = 0; i < overlap; i++) {
+    const rowArray = rowFromMap_(sheet, valueMaps[i]);
+    sheet.getRange(matches[i], 1, 1, numCols).setValues([rowArray]);
+  }
+
+  // 2) New data has MORE rows than existed: append the extras.
+  for (let i = overlap; i < valueMaps.length; i++) {
+    sheet.appendRow(rowFromMap_(sheet, valueMaps[i]));
+  }
+
+  // 3) New data has FEWER rows than existed: delete the surplus trailing rows.
+  //    Only happens after the kept rows are already overwritten with new data.
+  if (matches.length > valueMaps.length) {
+    deleteSurplusRows_(sheet, matches.slice(valueMaps.length));
+  }
+}
+
+/** Delete the given 1-based row numbers, highest first so indices do not shift. */
+function deleteSurplusRows_(sheet, rowNumbers) {
+  if (!rowNumbers || rowNumbers.length === 0) return;
+  rowNumbers.slice().sort(function (a, b) { return b - a; }).forEach(function (rn) {
+    sheet.deleteRow(rn);
+  });
 }
 
 function indexMap_(headers) {
@@ -325,14 +392,6 @@ function setCell_(sheet, rowNumber, col, name, value) {
 function appendNote_(sheet, rowNumber, col, msg) {
   if (col['InternalNotes'] === undefined) return;
   sheet.getRange(rowNumber, col['InternalNotes'] + 1).setValue(msg);
-}
-function appendByHeader_(sheet, valueMap) {
-  const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
-  const row = headers.map(function (h) {
-    const k = String(h).trim();
-    return Object.prototype.hasOwnProperty.call(valueMap, k) ? valueMap[k] : '';
-  });
-  sheet.appendRow(row);
 }
 function toNum_(v) {
   if (v === '' || v === null || v === undefined) return null;

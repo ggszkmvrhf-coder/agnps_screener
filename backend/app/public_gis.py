@@ -1,3 +1,4 @@
+# AGENT-L3: lead_id threaded through run_live_public_lookups for log correlation.
 """Live public GIS lookups used when PostGIS is not configured.
 
 These calls keep the Render deployment cheap for v1. They query authoritative
@@ -10,6 +11,7 @@ import re
 import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from shapely.geometry import LineString, MultiLineString, MultiPolygon, Point, Polygon
@@ -43,14 +45,38 @@ def run_live_public_lookups(
     analysis_geom: BaseGeometry,
     settings: Settings,
     warnings: List[str],
+    lead_id: str = "-",
 ) -> Dict[str, Any]:
-    """Return GIS fact updates from public services."""
+    """Return GIS fact updates from public services.
+
+    # AGENT-H4: Lookup calls now run in parallel via ThreadPoolExecutor(max_workers=5).
+    Each of the five lookup functions runs concurrently. Any lookup that raises an
+    exception is caught, a warning is appended, and an empty dict is used as its
+    result so a single service failure cannot block the others.
+    """
+    lookup_tasks = {
+        "county_town": lambda: lookup_county_town(locate_geom, settings, warnings),
+        "huc12": lambda: lookup_huc12(locate_geom, settings, warnings),
+        "wipwl": lambda: lookup_wipwl_waterbody(locate_geom, settings, warnings),
+        "dac": lambda: lookup_dac(locate_geom, analysis_geom, settings, warnings),
+        "soils": lambda: lookup_soils(analysis_geom, settings, warnings),
+    }
+
+    results: Dict[str, Dict[str, Any]] = {}
+    with ThreadPoolExecutor(max_workers=5) as executor:
+        future_to_name = {executor.submit(fn): name for name, fn in lookup_tasks.items()}
+        for future in as_completed(future_to_name):
+            name = future_to_name[future]
+            try:
+                results[name] = future.result()
+            except Exception as exc:
+                logger.warning("lead_id=%s Public GIS lookup '%s' raised an exception: %s", lead_id, name, exc)
+                warnings.append(f"Public GIS lookup '{name}' failed with error: {exc}")
+                results[name] = {}
+
     facts: Dict[str, Any] = {}
-    facts.update(lookup_county_town(locate_geom, settings, warnings))
-    facts.update(lookup_huc12(locate_geom, settings, warnings))
-    facts.update(lookup_wipwl_waterbody(locate_geom, settings, warnings))
-    facts.update(lookup_dac(locate_geom, analysis_geom, settings, warnings))
-    facts.update(lookup_soils(analysis_geom, settings, warnings))
+    for partial in results.values():
+        facts.update(partial)
     return facts
 
 
@@ -334,7 +360,9 @@ def lookup_wipwl_waterbody(
     }
     candidates = []
 
-    for lon, lat in _lookup_points(geom):
+    # AGENT-H4: Sample points capped at 3 to limit max HTTP calls to 12 (3 points x 4 layers).
+    sample_points = list(_lookup_points(geom))[:3]
+    for lon, lat in sample_points:
         for layer_id, layer_type in WIPWL_LAYERS:
             data = _json_get(
                 f"{NYSDEC_WIPWL_BASE_URL}/{layer_id}/query",
@@ -543,6 +571,7 @@ def _sda_mapunit_features(
 
 
 def _polygon_from_sda_coordinates(value: str) -> Optional[Polygon]:
+    # AGENT-H3: Coordinate bounds check and acreage sanity guard added.
     coords = []
     for pair in value.split():
         parts = pair.split(",")
@@ -556,10 +585,36 @@ def _polygon_from_sda_coordinates(value: str) -> Optional[Polygon]:
             continue
     if len(coords) < 4:
         return None
+    # Validate coordinate bounds before building the polygon.
+    for lon, lat in coords:
+        if not (-180.0 <= lon <= 180.0):
+            logger.warning(
+                "SDA coordinate out of longitude bounds: lon=%s (expected -180 to 180); "
+                "discarding polygon.",
+                lon,
+            )
+            return None
+        if not (-90.0 <= lat <= 90.0):
+            logger.warning(
+                "SDA coordinate out of latitude bounds: lat=%s (expected -90 to 90); "
+                "discarding polygon.",
+                lat,
+            )
+            return None
     try:
-        return Polygon(coords).buffer(0)
+        polygon = Polygon(coords).buffer(0)
     except Exception:
         return None
+    # Sanity-check polygon area in degree-squared units.
+    # >0.1 deg² is roughly >10,000 km² — catches continent-scale inverted polygons.
+    if polygon.area > 0.1:
+        logger.warning(
+            "SDA polygon area %.6f deg² exceeds sanity threshold (0.1 deg²); "
+            "likely inverted or erroneous coordinates — discarding polygon.",
+            polygon.area,
+        )
+        return None
+    return polygon
 
 
 def _sda_component_rows(

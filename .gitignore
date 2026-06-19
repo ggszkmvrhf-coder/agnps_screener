@@ -3,6 +3,8 @@ __pycache__/
 *.pyc
 .env
 backend/boundary_store.json
+*.bak*
+backend/.agent_notes/
 # Don't commit downloaded GIS data, but keep the empty folder structure.
 data/raw/**
 data/processed/**

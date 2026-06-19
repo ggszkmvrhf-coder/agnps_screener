@@ -1,3 +1,4 @@
+# AGENT-L3: lead_id in log messages for traceability.
 """GIS lookups against PostGIS vector layers + local DEM/slope rasters.
 
 Design rules (do not violate):
@@ -328,6 +329,21 @@ def lookup_slope(geom4326, settings: Settings, warnings: List[str]) -> Dict[str,
     for path in tiles:
         try:
             with rasterio.open(path) as src:
+                # AGENT-H3: CRS validation added — rejects None CRS and geographic CRS tiles.
+                if src.crs is None:
+                    logger.warning(
+                        "DEM tile %s has no CRS defined; skipping to avoid incorrect slope values.",
+                        path,
+                    )
+                    continue
+                if src.crs.is_geographic:
+                    logger.warning(
+                        "DEM tile %s has a geographic CRS (%s); np.gradient requires a projected "
+                        "CRS with linear units — skipping to avoid wrong slope values.",
+                        path,
+                        src.crs,
+                    )
+                    continue
                 geom_in_raster = transform_geom("EPSG:4326", src.crs.to_string(), mapping(geom4326))
                 out_image, _ = rio_mask(src, [geom_in_raster], crop=True, filled=True)
                 arr = out_image[0].astype("float64")
@@ -371,6 +387,7 @@ def run_lookups(
     analysis_source: str,
     engine,
     settings: Settings,
+    lead_id: str = "-",
 ) -> Tuple[Dict[str, Any], List[str]]:
     """Run every lookup against prepared geometries. Returns (facts, warnings).
 
@@ -388,13 +405,15 @@ def run_lookups(
 
     if engine is None:
         if settings.public_gis_lookups_enabled:
+            logger.info("lead_id=%s PostGIS not configured; using live public GIS APIs.", lead_id)
             warnings.append("PostGIS not configured; using live public GIS APIs.")
             facts.update(
                 public_gis.run_live_public_lookups(
-                    locate_geom, analysis_geom, settings, warnings
+                    locate_geom, analysis_geom, settings, warnings, lead_id=lead_id
                 )
             )
         else:
+            logger.info("lead_id=%s Database not configured/unreachable; vector GIS lookups skipped.", lead_id)
             warnings.append("Database not configured/unreachable; vector GIS lookups skipped.")
     else:
         facts.update(lookup_county_town(engine, locate_wkt, settings, warnings))

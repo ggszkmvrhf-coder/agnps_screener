@@ -5,11 +5,17 @@ so the backend is never hardcoded to one county, one CRS, or one cost table.
 Nothing is required for the app to *start* -- a missing value just disables the
 related lookup/feature and is reported as a warning.
 """
+import json
+import logging
+import re
 from functools import lru_cache
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+_log = logging.getLogger(__name__)
 
 # Feet <-> meters; m^2 -> acres.
 FT_PER_M = 3.280839895
@@ -36,6 +42,8 @@ class Settings(BaseSettings):
     # If set, /save-boundary and /process-lead require this key
     # (header X-API-Key, or ?key= for the browser draw page).
     api_key: Optional[str] = None
+    # AGENT-H1: Separate signing secret for KML share links. Preferred over api_key for signing if set.
+    share_link_secret: Optional[str] = None
 
     # ----------------------------------------------- shareable boundary link ---
     # Public base URL of this backend, used to build absolute boundary share
@@ -93,6 +101,23 @@ class Settings(BaseSettings):
     dac_table: str = "dac_areas"
     ssurgo_table: str = "ssurgo_soils"
 
+    # AGENT-M4: Table name fields validated at startup against safe identifier pattern.
+    @model_validator(mode="after")
+    def _validate_table_names(self) -> "Settings":
+        table_name_fields = [
+            "counties_table", "towns_table", "huc8_table", "huc10_table",
+            "huc12_table", "streams_table", "wipwl_table", "dac_table",
+            "ssurgo_table",
+        ]
+        for field_name in table_name_fields:
+            value = getattr(self, field_name)
+            if not re.fullmatch(r"^[a-z_][a-z0-9_]*$", value):
+                raise ValueError(
+                    f"Invalid table name for {field_name!r}: {value!r} "
+                    "(must match ^[a-z_][a-z0-9_]*$)"
+                )
+        return self
+
     # ------------------------------------------------ cost-share calculator ---
     costshare_low_pct: float = 0.75
     costshare_high_pct: float = 0.875
@@ -122,6 +147,13 @@ class Settings(BaseSettings):
     def point_buffer_m(self) -> float:
         return self.point_buffer_ft / FT_PER_M
 
+    # AGENT-C1: True if at least one durable storage backend (PostGIS or AppSheet) is configured.
+    @property
+    def durable_storage_configured(self) -> bool:
+        return bool(
+            self.database_url or (self.appsheet_app_id and self.appsheet_api_key)
+        )
+
     @property
     def cors_origins(self) -> List[str]:
         return [
@@ -132,9 +164,13 @@ class Settings(BaseSettings):
 
     # Rough project-cost placeholders: ProblemType -> (base $, $/acre).
     # PLACEHOLDERS ONLY -- edit freely; the company owns these numbers.
+
+    # AGENT-L5: Set COST_TABLE_JSON env var to override cost table without redeploying. Must be a valid JSON object matching the hard-coded structure.
+    cost_table_json: Optional[str] = None
+
     @property
     def project_cost_table(self) -> Dict[str, Tuple[float, float]]:
-        return {
+        _hardcoded: Dict[str, Tuple[float, float]] = {
             "bad outlet": (8000.0, 300.0),
             "ditch or stream erosion": (10000.0, 400.0),
             "surface erosion": (10000.0, 400.0),
@@ -145,6 +181,17 @@ class Settings(BaseSettings):
             "other": (5000.0, 200.0),
             "unknown": (5000.0, 200.0),
         }
+        if self.cost_table_json:
+            try:
+                parsed = json.loads(self.cost_table_json)
+                return {k: tuple(v) for k, v in parsed.items()}  # type: ignore[return-value]
+            except Exception as exc:
+                _log.warning(
+                    "COST_TABLE_JSON is set but could not be parsed (%s); "
+                    "falling back to hard-coded cost table.",
+                    exc,
+                )
+        return _hardcoded
 
     project_cost_default: Tuple[float, float] = (5000.0, 200.0)
 

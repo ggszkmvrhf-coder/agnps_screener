@@ -15,11 +15,13 @@ If API_KEY is set in the environment, /save-boundary and /process-lead require i
 """
 import json
 import logging
+import uuid
+from contextvars import ContextVar
 from pathlib import Path
 from typing import Any, Dict, Optional
 from xml.sax.saxutils import escape
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Query
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 from fastapi.staticfiles import StaticFiles
@@ -37,17 +39,37 @@ from app.settings import get_settings
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("agnps")
 
+# AGENT-L3: Per-request UUID for log correlation.
+_request_id_var: ContextVar[str] = ContextVar("request_id", default="-")
+
 HERE = Path(__file__).parent
 SAMPLE_PAYLOAD = HERE / "sample_payload.json"
 
 _settings = get_settings()
 app = FastAPI(title="AgNPS Candidate Lead Screener", version="0.2.0")
+# AGENT-M3: Restricted to GET/POST and Content-Type/X-API-Key only.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_settings.cors_origins,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST"],
+    allow_headers=["Content-Type", "X-API-Key"],
 )
+
+
+# AGENT-L3: Per-request UUID for log correlation.
+@app.middleware("http")
+async def _request_id_middleware(request: Request, call_next):
+    request_id = uuid.uuid4().hex[:8]
+    _request_id_var.set(request_id)
+    lead_id = request.path_params.get("lead_id", "-")
+    logger.info(
+        "request started lead_id=%s request_id=%s path=%s",
+        lead_id,
+        request_id,
+        request.url.path,
+    )
+    return await call_next(request)
+
 
 _store = BoundaryStore(_settings.boundary_store_path)
 
@@ -139,7 +161,8 @@ def _process(lead: Dict[str, Any]) -> Dict[str, Any]:
         geom_kind = "boundary" if boundary_geom is not None else "point"
 
         facts, gis_warnings = gis_lookup.run_lookups(
-            locate_geom, analysis_geom, analysis_source, engine, settings
+            locate_geom, analysis_geom, analysis_source, engine, settings,
+            lead_id=lead.get("LeadID", "-"),
         )
         warnings.extend(gis_warnings)
 
@@ -228,6 +251,13 @@ def boundary_kml(
             media_type="application/xml", status_code=403,
         )
     geom, _, record = boundary_mod.load_stored_geometry(lead_id, _store)
+    # AGENT-M5: Return cached KML if available, skipping AppSheet read on warm cache.
+    if record and record.get("CachedKML"):
+        return Response(
+            content=record["CachedKML"],
+            media_type="application/vnd.google-earth.kml+xml",
+            headers={"Content-Disposition": f'attachment; filename="{_kml_filename(lead_id)}"'},
+        )
     if geom is None:
         geom, _, record = boundary_mod.load_database_geometry(lead_id, settings)
     if geom is None:
