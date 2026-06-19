@@ -438,7 +438,19 @@ def lookup_dac(
 ) -> Dict[str, Any]:
     out = {"DACIntersecting": False, "DACNearby": False}
     lon, lat = _lookup_point(locate_geom)
+
+    # SECURITY-FIX-3: Validate coordinates and reject single-quoted WKT before SoQL interpolation.
+    if not (-180.0 <= lon <= 180.0) or not (-90.0 <= lat <= 90.0):
+        logger.warning(
+            "DAC lookup: coordinate out of range lon=%s lat=%s — skipping", lon, lat
+        )
+        return {}
+
     point_wkt = f"POINT ({lon} {lat})"
+
+    if "'" in point_wkt:
+        logger.warning("DAC lookup: WKT contains single quote — skipping to prevent injection")
+        return {}
 
     point_rows = _query_dac(
         f"intersects(the_geom, '{point_wkt}')",
@@ -455,8 +467,14 @@ def lookup_dac(
             settings.dac_nearby_distance_ft,
             settings,
         )
+        nearby_wkt = nearby_geom.wkt
+
+        if "'" in nearby_wkt:
+            logger.warning("DAC lookup: WKT contains single quote — skipping to prevent injection")
+            return out
+
         where = (
-            f"intersects(the_geom, '{nearby_geom.wkt}') "
+            f"intersects(the_geom, '{nearby_wkt}') "
             "AND dac_designation = 'Designated as DAC'"
         )
         rows = _query_dac(where, settings, warnings)

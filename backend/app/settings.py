@@ -38,6 +38,9 @@ class Settings(BaseSettings):
     public_gis_lookups_enabled: bool = True
     public_api_timeout_sec: float = 12.0
 
+    # SECURITY: Disables /docs, /redoc, /openapi.json, and /debug/* routes in production.
+    debug_endpoints_enabled: bool = False
+
     # ------------------------------------------------------- API security ---
     # If set, /save-boundary and /process-lead require this key
     # (header X-API-Key, or ?key= for the browser draw page).

@@ -13,6 +13,7 @@ Endpoints:
 If API_KEY is set in the environment, /save-boundary and /process-lead require it
 (header `X-API-Key`, or `?key=` for the browser draw page).
 """
+import hmac
 import json
 import logging
 import uuid
@@ -25,6 +26,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 from fastapi.staticfiles import StaticFiles
+from starlette.responses import JSONResponse
 
 from app import boundary as boundary_mod
 from app import bmp_rules, calculators, gis_lookup, report_data, scoring, share_links
@@ -46,7 +48,14 @@ HERE = Path(__file__).parent
 SAMPLE_PAYLOAD = HERE / "sample_payload.json"
 
 _settings = get_settings()
-app = FastAPI(title="AgNPS Candidate Lead Screener", version="0.2.0")
+# SECURITY-FIX-1: Docs/schema disabled in production unless DEBUG_ENDPOINTS_ENABLED=true.
+app = FastAPI(
+    title="AgNPS Candidate Lead Screener",
+    version="0.2.0",
+    docs_url="/docs" if _settings.debug_endpoints_enabled else None,
+    redoc_url="/redoc" if _settings.debug_endpoints_enabled else None,
+    openapi_url="/openapi.json" if _settings.debug_endpoints_enabled else None,
+)
 # AGENT-M3: Restricted to GET/POST and Content-Type/X-API-Key only.
 app.add_middleware(
     CORSMiddleware,
@@ -71,6 +80,40 @@ async def _request_id_middleware(request: Request, call_next):
     return await call_next(request)
 
 
+MAX_BODY_BYTES = 512 * 1024  # 512 KB
+
+
+# SECURITY-FIX-4: Reject oversized request bodies before parsing.
+@app.middleware("http")
+async def _limit_body_size(request: Request, call_next):
+    content_length = request.headers.get("content-length")
+    if content_length and int(content_length) > MAX_BODY_BYTES:
+        return JSONResponse(
+            {"success": False, "message": "Request body too large. Maximum size is 512 KB."},
+            status_code=413,
+        )
+    return await call_next(request)
+
+
+# SECURITY-FIX-5: Security response headers on all responses.
+@app.middleware("http")
+async def _security_headers(request: Request, call_next):
+    response = await call_next(request)
+    response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Content-Security-Policy"] = (
+        "default-src 'self'; "
+        "script-src 'self' 'unsafe-inline' https://unpkg.com; "
+        "style-src 'self' 'unsafe-inline' https://unpkg.com; "
+        "img-src 'self' data: https://*.arcgisonline.com https://tile.openstreetmap.org; "
+        "connect-src 'self'; "
+        "frame-ancestors 'none'"
+    )
+    return response
+
+
 _store = BoundaryStore(_settings.boundary_store_path)
 
 _LAYER_ATTRS = [
@@ -84,8 +127,11 @@ def require_api_key(
     key: Optional[str] = Query(default=None),
 ) -> None:
     settings = get_settings()
-    if settings.api_key and (x_api_key or key) != settings.api_key:
-        raise HTTPException(status_code=401, detail="Invalid or missing API key")
+    if settings.api_key:
+        submitted_key = x_api_key or key or ""
+        # SECURITY-FIX-2: Constant-time comparison prevents timing side-channel.
+        if not hmac.compare_digest(submitted_key, settings.api_key):
+            raise HTTPException(status_code=401, detail="Invalid or missing API key")
 
 
 # --------------------------------------------------------------- pipeline ---
@@ -219,10 +265,12 @@ def process_lead(lead: LeadProcessRequest) -> Dict[str, Any]:
     return _process(lead.model_dump())
 
 
-@app.post("/debug/process-sample", response_model=LeadProcessResponse, dependencies=[Depends(require_api_key)])
-def process_sample() -> Dict[str, Any]:
-    payload = json.loads(SAMPLE_PAYLOAD.read_text(encoding="utf-8"))
-    return _process(payload)
+# SECURITY-FIX-6: Debug route only registered when DEBUG_ENDPOINTS_ENABLED=true.
+if _settings.debug_endpoints_enabled:
+    @app.post("/debug/process-sample", response_model=LeadProcessResponse, dependencies=[Depends(require_api_key)])
+    def process_sample() -> Dict[str, Any]:
+        payload = json.loads(SAMPLE_PAYLOAD.read_text(encoding="utf-8"))
+        return _process(payload)
 
 
 def _kml_filename(value: str) -> str:
