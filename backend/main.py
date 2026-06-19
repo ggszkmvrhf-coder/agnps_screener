@@ -107,7 +107,7 @@ async def _security_headers(request: Request, call_next):
         "default-src 'self'; "
         "script-src 'self' 'unsafe-inline' https://unpkg.com; "
         "style-src 'self' 'unsafe-inline' https://unpkg.com; "
-        "img-src 'self' data: https://*.arcgisonline.com https://tile.openstreetmap.org; "
+        "img-src 'self' data: https://unpkg.com https://*.arcgisonline.com https://tile.openstreetmap.org https://*.openstreetmap.org; "
         "connect-src 'self'; "
         "frame-ancestors 'none'"
     )
