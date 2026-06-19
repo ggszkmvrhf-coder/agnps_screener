@@ -38,6 +38,12 @@ class Settings(BaseSettings):
     public_gis_lookups_enabled: bool = True
     public_api_timeout_sec: float = 12.0
 
+    # Multi-state GIS routing kill-switch.
+    # When False, all public GIS lookups are forced to NY regardless of the
+    # detected state from the Census geocoder. Set MULTI_STATE_ROUTING_ENABLED=false
+    # in the environment to revert to NY-only behaviour without a code deploy.
+    multi_state_routing_enabled: bool = True
+
     # SECURITY: Disables /docs, /redoc, /openapi.json, and /debug/* routes in production.
     debug_endpoints_enabled: bool = False
 

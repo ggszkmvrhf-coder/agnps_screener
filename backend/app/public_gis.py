@@ -18,10 +18,15 @@ from shapely.geometry import LineString, MultiLineString, MultiPolygon, Point, P
 from shapely.geometry.base import BaseGeometry
 from shapely.ops import transform as shp_transform
 
+from . import state_registry
 from .settings import FT_PER_M, Settings
 
 logger = logging.getLogger(__name__)
 
+# ---------------------------------------------------------------------------
+# Module-level NY constants — kept verbatim so PostGIS branch and any other
+# code that imports them directly continues to work unchanged.
+# ---------------------------------------------------------------------------
 USGS_WBD_HUC12_URL = "https://hydro.nationalmap.gov/arcgis/rest/services/wbd/MapServer/6/query"
 NYSDEC_WIPWL_BASE_URL = (
     "https://services6.arcgis.com/DZHaqZm9cxOD4CWM/arcgis/rest/services/"
@@ -49,32 +54,70 @@ def run_live_public_lookups(
 ) -> Dict[str, Any]:
     """Return GIS fact updates from public services.
 
-    # AGENT-H4: Lookup calls now run in parallel via ThreadPoolExecutor(max_workers=5).
-    Each of the five lookup functions runs concurrently. Any lookup that raises an
-    exception is caught, a warning is appended, and an empty dict is used as its
-    result so a single service failure cannot block the others.
+    Phase 1: run lookup_county_town synchronously so state detection is
+    available before the remaining lookups run.
+
+    Phase 2: remaining lookups (huc12, soils, waterbody, dac) run concurrently
+    in a ThreadPoolExecutor(max_workers=4), with state passed to waterbody+dac.
+
+    Any lookup that raises an exception is caught, a warning is appended, and
+    an empty dict is used as its result so a single service failure cannot block
+    the others.
+
+    The multi_state_routing_enabled kill-switch on settings forces state="NY"
+    when False, preserving legacy behaviour without a code deploy.
     """
-    lookup_tasks = {
-        "county_town": lambda: lookup_county_town(locate_geom, settings, warnings),
+    # ------------------------------------------------------------------
+    # Phase 1: county/town lookup — must complete first for state detection.
+    # ------------------------------------------------------------------
+    try:
+        county_town_facts = lookup_county_town(locate_geom, settings, warnings)
+    except Exception as exc:
+        logger.warning("lead_id=%s Public GIS lookup 'county_town' raised an exception: %s", lead_id, exc)
+        warnings.append(f"Public GIS lookup 'county_town' failed with error: {exc}")
+        county_town_facts = {}
+
+    # Derive routing state from detected StateAuto.
+    detected_state = county_town_facts.get("StateAuto")
+    if getattr(settings, "multi_state_routing_enabled", True):
+        routing_state = state_registry.normalize_state(detected_state)
+    else:
+        routing_state = "NY"
+        if detected_state and detected_state != "NY":
+            logger.info(
+                "lead_id=%s multi_state_routing_enabled=False; forcing state=NY "
+                "(detected=%s)",
+                lead_id,
+                detected_state,
+            )
+
+    # ------------------------------------------------------------------
+    # Phase 2: remaining lookups in parallel.
+    # ------------------------------------------------------------------
+    lookup_tasks: Dict[str, Any] = {
         "huc12": lambda: lookup_huc12(locate_geom, settings, warnings),
-        "wipwl": lambda: lookup_wipwl_waterbody(locate_geom, settings, warnings),
-        "dac": lambda: lookup_dac(locate_geom, analysis_geom, settings, warnings),
         "soils": lambda: lookup_soils(analysis_geom, settings, warnings),
+        "waterbody": lambda s=routing_state: lookup_waterbody(locate_geom, settings, warnings, s),
+        "dac": lambda s=routing_state: lookup_dac(locate_geom, analysis_geom, settings, warnings, s),
     }
 
     results: Dict[str, Dict[str, Any]] = {}
-    with ThreadPoolExecutor(max_workers=5) as executor:
+    with ThreadPoolExecutor(max_workers=4) as executor:
         future_to_name = {executor.submit(fn): name for name, fn in lookup_tasks.items()}
         for future in as_completed(future_to_name):
             name = future_to_name[future]
             try:
                 results[name] = future.result()
             except Exception as exc:
-                logger.warning("lead_id=%s Public GIS lookup '%s' raised an exception: %s", lead_id, name, exc)
+                logger.warning(
+                    "lead_id=%s Public GIS lookup '%s' raised an exception: %s",
+                    lead_id, name, exc,
+                )
                 warnings.append(f"Public GIS lookup '{name}' failed with error: {exc}")
                 results[name] = {}
 
     facts: Dict[str, Any] = {}
+    facts.update(county_town_facts)
     for partial in results.values():
         facts.update(partial)
     return facts
@@ -275,12 +318,12 @@ def _is_designated_dac(value: Any) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Census county/town
+# Census county/town  (now also detects StateAuto)
 # ---------------------------------------------------------------------------
 def lookup_county_town(
     geom: BaseGeometry, settings: Settings, warnings: List[str]
 ) -> Dict[str, Any]:
-    out = {"CountyAuto": None, "TownAuto": None}
+    out: Dict[str, Any] = {"CountyAuto": None, "TownAuto": None, "StateAuto": None}
     lon, lat = _lookup_point(geom)
     data = _json_get(
         CENSUS_COORDINATES_URL,
@@ -298,14 +341,45 @@ def lookup_county_town(
     geos = (((data or {}).get("result") or {}).get("geographies") or {})
     counties = geos.get("Counties") or []
     towns = geos.get("County Subdivisions") or []
+    states = geos.get("States") or []
+
     if counties:
         out["CountyAuto"] = counties[0].get("BASENAME") or counties[0].get("NAME")
     else:
         warnings.append("Live Census lookup did not return a county.")
+
     if towns:
         out["TownAuto"] = towns[0].get("BASENAME") or towns[0].get("NAME")
     else:
         warnings.append("Live Census lookup did not return a town/county subdivision.")
+
+    # --- State detection (soft fail: never raises, sets StateAuto=None on miss) ---
+    state_abbr: Optional[str] = None
+
+    # Try States geography first.
+    if states:
+        raw = states[0].get("STUSAB")
+        if raw:
+            state_abbr = str(raw).strip().upper()
+
+    # Fallback: STUSAB from Counties geography.
+    if not state_abbr and counties:
+        raw = counties[0].get("STUSAB")
+        if raw:
+            state_abbr = str(raw).strip().upper()
+
+    # Fallback: numeric STATE FIPS -> abbreviation lookup.
+    if not state_abbr and counties:
+        fips = str(counties[0].get("STATE") or "").strip().zfill(2)
+        state_abbr = state_registry.STATE_FIPS_TO_ABBR.get(fips)
+
+    if state_abbr:
+        out["StateAuto"] = state_abbr
+    else:
+        warnings.append(
+            "Live Census lookup could not determine the US state from the coordinates."
+        )
+
     return out
 
 
@@ -346,11 +420,47 @@ def lookup_huc12(
 
 
 # ---------------------------------------------------------------------------
-# NYSDEC WI/PWL waterbodies
+# Waterbody lookup — router + per-provider implementations
 # ---------------------------------------------------------------------------
-def lookup_wipwl_waterbody(
-    geom: BaseGeometry, settings: Settings, warnings: List[str]
+
+def lookup_waterbody(
+    geom: BaseGeometry,
+    settings: Settings,
+    warnings: List[str],
+    state: str = "NY",
 ) -> Dict[str, Any]:
+    """Route waterbody lookup to the correct provider for the given state."""
+    cfg = state_registry.get_state_config(state)
+    src = cfg.waterbody
+    if src.provider == "arcgis_featureserver":
+        return _waterbody_featureserver(geom, settings, warnings, src)
+    if src.provider == "arcgis_mapserver":
+        return _waterbody_mapserver(geom, settings, warnings, src)
+    # Unknown provider: warn and return empty output.
+    warnings.append(
+        f"Waterbody provider '{src.provider}' for state '{state}' is not implemented."
+    )
+    return {
+        "NearestWaterbodyName": None,
+        "NearestWaterbodyType": None,
+        "DistanceToWaterbodyFt": None,
+        "WIPWLNearby": False,
+        "WIPWLSummary": None,
+    }
+
+
+def _waterbody_featureserver(
+    geom: BaseGeometry,
+    settings: Settings,
+    warnings: List[str],
+    src: "state_registry.WaterbodySource",
+) -> Dict[str, Any]:
+    """NY-style ArcGIS FeatureServer waterbody lookup.
+
+    This is the CURRENT lookup_wipwl_waterbody body moved verbatim and
+    parameterized by WaterbodySource so NY behaviour is byte-for-byte
+    identical to pre-routing.
+    """
     out = {
         "NearestWaterbodyName": None,
         "NearestWaterbodyType": None,
@@ -360,12 +470,12 @@ def lookup_wipwl_waterbody(
     }
     candidates = []
 
-    # AGENT-H4: Sample points capped at 3 to limit max HTTP calls to 12 (3 points x 4 layers).
-    sample_points = list(_lookup_points(geom))[:3]
+    # AGENT-H4: Sample points capped to limit max HTTP calls.
+    sample_points = list(_lookup_points(geom))[:src.max_sample_points]
     for lon, lat in sample_points:
-        for layer_id, layer_type in WIPWL_LAYERS:
+        for layer_id, layer_type in src.layers:
             data = _json_get(
-                f"{NYSDEC_WIPWL_BASE_URL}/{layer_id}/query",
+                f"{src.base_url}/{layer_id}/query",
                 {
                     "f": "json",
                     "geometry": f"{lon},{lat}",
@@ -396,11 +506,11 @@ def lookup_wipwl_waterbody(
         return out
 
     dist, layer_type, attrs = sorted(candidates, key=lambda x: x[0])[0]
-    name = _pick_attr(attrs, ["WATERBODY", "WATER_NAME", "NAME", "PWL_NAME", "WB_NAME"])
-    category = _pick_attr(attrs, ["WATERBODY_CATEGORY", "CATEGORY", "ASSESSMENT", "STATUS"])
-    water_class = _pick_attr(attrs, ["CLASS", "WQS_CLASS"])
-    factsheet = _pick_attr(attrs, ["FACTSHEET", "FACTSHEET_URL"])
-    assessed = _pick_attr(attrs, ["CYCLE_LAST_ASSESSED", "LAST_ASSESSED"])
+    name = _pick_attr(attrs, src.name_fields)
+    category = _pick_attr(attrs, src.category_fields)
+    water_class = _pick_attr(attrs, src.class_fields)
+    factsheet = _pick_attr(attrs, src.factsheet_fields)
+    assessed = _pick_attr(attrs, src.date_fields)
     descr = _pick_attr(attrs, ["DESCRIPT", "DESCRIPTION"])
 
     parts = []
@@ -427,16 +537,181 @@ def lookup_wipwl_waterbody(
     return out
 
 
+def _waterbody_mapserver(
+    geom: BaseGeometry,
+    settings: Settings,
+    warnings: List[str],
+    src: "state_registry.WaterbodySource",
+) -> Dict[str, Any]:
+    """EPA ATTAINS-style ArcGIS MapServer waterbody lookup (DE and similar).
+
+    Uses the same _json_get + ArcGIS point-query pattern as _waterbody_featureserver.
+    The base path differs: {base}/{layer}/query (MapServer convention).
+    When src.where is set it is sent as a server-side filter.
+    When src.dedupe_field is set, candidates are deduplicated on that key.
+    When src.class_fields / src.date_fields are empty, those summary fragments
+    are skipped.
+
+    WIPWLSummary parity: DE output always contains the substring "Waterbody:"
+    (when a name is found) and either "status" or "assessment" (from the
+    status/category fragment) so scoring._wipwl greps work identically for NY
+    and DE leads.
+    """
+    out = {
+        "NearestWaterbodyName": None,
+        "NearestWaterbodyType": None,
+        "DistanceToWaterbodyFt": None,
+        "WIPWLNearby": False,
+        "WIPWLSummary": None,
+    }
+    candidates = []
+    seen_dedupe: set = set()
+
+    sample_points = list(_lookup_points(geom))[:src.max_sample_points]
+    for lon, lat in sample_points:
+        for layer_id, layer_type in src.layers:
+            params: Dict[str, Any] = {
+                "f": "json",
+                "geometry": f"{lon},{lat}",
+                "geometryType": "esriGeometryPoint",
+                "inSR": 4326,
+                "outSR": 4326,
+                "distance": settings.wipwl_search_radius_ft,
+                "units": "esriSRUnit_Foot",
+                "spatialRel": "esriSpatialRelIntersects",
+                "outFields": "*",
+                "returnGeometry": "true",
+            }
+            if src.where:
+                params["where"] = src.where
+            data = _json_get(
+                f"{src.base_url}/{layer_id}/query",
+                params,
+                settings,
+                f"ATTAINS {layer_type}",
+                warnings,
+            )
+            for feature in (data or {}).get("features") or []:
+                attrs = feature.get("attributes") or {}
+
+                # Deduplication by assessmentunitidentifier (or any dedupe_field).
+                if src.dedupe_field:
+                    dedup_val = _pick_attr(attrs, [src.dedupe_field])
+                    if dedup_val is not None:
+                        if dedup_val in seen_dedupe:
+                            continue
+                        seen_dedupe.add(dedup_val)
+
+                fgeom = _arcgis_geom_to_shapely(feature.get("geometry") or {})
+                dist = _distance_ft(geom, fgeom, settings) if fgeom is not None else None
+                candidates.append((dist if dist is not None else 1e12, layer_type, attrs))
+
+    if not candidates:
+        warnings.append(
+            f"No ATTAINS waterbody found within "
+            f"{settings.wipwl_search_radius_ft:.0f} ft."
+        )
+        return out
+
+    dist, layer_type, attrs = sorted(candidates, key=lambda x: x[0])[0]
+    name = _pick_attr(attrs, src.name_fields)
+    category = _pick_attr(attrs, src.category_fields)
+    status = _pick_attr(attrs, src.status_fields)
+    cycle = _pick_attr(attrs, src.cycle_fields)
+    # class_fields and date_fields are empty for DE — skip those fragments.
+    water_class = _pick_attr(attrs, src.class_fields) if src.class_fields else None
+    assessed = _pick_attr(attrs, src.date_fields) if src.date_fields else None
+    factsheet = _pick_attr(attrs, src.factsheet_fields) if src.factsheet_fields else None
+
+    parts = []
+    if name:
+        parts.append(f"Waterbody: {name}")
+    # Emit a fragment containing "status" so scoring._wipwl matches correctly.
+    if status:
+        parts.append(f"Overall status: {status}")
+    elif category:
+        parts.append(f"Assessment/category: {category}")
+    # Additional detail.
+    if category and status:
+        # Both present: add category as a second fragment.
+        parts.append(f"Category: {category}")
+    if water_class:
+        parts.append(f"Class: {water_class}")
+    if cycle:
+        parts.append(f"Reporting cycle: {cycle}")
+    if assessed:
+        parts.append(f"Assessed: {assessed}")
+    if dist < 1e12:
+        parts.append(f"~{round(dist):.0f} ft away")
+    if factsheet:
+        parts.append(f"Factsheet: {factsheet}")
+
+    out["NearestWaterbodyName"] = name
+    out["NearestWaterbodyType"] = layer_type if not category else f"{layer_type}: {category}"
+    out["DistanceToWaterbodyFt"] = None if dist >= 1e12 else dist
+    out["WIPWLNearby"] = True
+    out["WIPWLSummary"] = "; ".join(parts) or f"ATTAINS {layer_type} assessment nearby."
+    return out
+
+
 # ---------------------------------------------------------------------------
-# NY DAC
+# Backward-compatible alias — existing callers (PostGIS branch, tests) that
+# call lookup_wipwl_waterbody directly continue to work unchanged.
 # ---------------------------------------------------------------------------
+def lookup_wipwl_waterbody(
+    geom: BaseGeometry, settings: Settings, warnings: List[str]
+) -> Dict[str, Any]:
+    """NY-only waterbody lookup (backward-compatible alias).
+
+    This preserves the original public API so any code that calls
+    lookup_wipwl_waterbody directly is unaffected.  New code should call
+    lookup_waterbody(geom, settings, warnings, state) instead.
+    """
+    return lookup_waterbody(geom, settings, warnings, state="NY")
+
+
+# ---------------------------------------------------------------------------
+# DAC lookup — router + per-provider implementations
+# ---------------------------------------------------------------------------
+
 def lookup_dac(
     locate_geom: BaseGeometry,
     analysis_geom: BaseGeometry,
     settings: Settings,
     warnings: List[str],
+    state: str = "NY",
 ) -> Dict[str, Any]:
-    out = {"DACIntersecting": False, "DACNearby": False}
+    """Route DAC lookup to the correct provider for the given state."""
+    cfg = state_registry.get_state_config(state)
+    src = cfg.dac
+    if src.provider == "socrata":
+        return _dac_socrata(locate_geom, analysis_geom, settings, warnings, src)
+    if src.provider == "arcgis_featureserver":
+        return _dac_arcgis_ej(locate_geom, analysis_geom, settings, warnings, src)
+    warnings.append(
+        f"DAC provider '{src.provider}' for state '{state}' is not implemented."
+    )
+    return {"DACIntersecting": False, "DACNearby": False, "DACSource": None}
+
+
+def _dac_socrata(
+    locate_geom: BaseGeometry,
+    analysis_geom: BaseGeometry,
+    settings: Settings,
+    warnings: List[str],
+    src: "state_registry.DacSource",
+) -> Dict[str, Any]:
+    """NY DAC lookup via Socrata (data.ny.gov).
+
+    This is the original lookup_dac body moved verbatim. Both injection guards
+    (coordinate-range check and single-quote WKT rejection) are preserved
+    exactly as they were.
+    """
+    out: Dict[str, Any] = {
+        "DACIntersecting": False,
+        "DACNearby": False,
+        "DACSource": "NY DAC (data.ny.gov)",
+    }
     lon, lat = _lookup_point(locate_geom)
 
     # SECURITY-FIX-3: Validate coordinates and reject single-quoted WKT before SoQL interpolation.
@@ -454,11 +729,15 @@ def lookup_dac(
 
     point_rows = _query_dac(
         f"intersects(the_geom, '{point_wkt}')",
+        src.base_url,
         settings,
         warnings,
     )
     if point_rows:
-        out["DACIntersecting"] = any(_is_designated_dac(r.get("dac_designation")) for r in point_rows)
+        out["DACIntersecting"] = any(
+            _is_designated_dac(r.get(src.designation_field or "dac_designation"))
+            for r in point_rows
+        )
         out["DACNearby"] = out["DACIntersecting"]
 
     if not out["DACNearby"]:
@@ -477,14 +756,128 @@ def lookup_dac(
             f"intersects(the_geom, '{nearby_wkt}') "
             "AND dac_designation = 'Designated as DAC'"
         )
-        rows = _query_dac(where, settings, warnings)
+        rows = _query_dac(where, src.base_url, settings, warnings)
         out["DACNearby"] = bool(rows)
     return out
 
 
-def _query_dac(where: str, settings: Settings, warnings: List[str]) -> List[Dict[str, Any]]:
+def _dac_arcgis_ej(
+    locate_geom: BaseGeometry,
+    analysis_geom: BaseGeometry,
+    settings: Settings,
+    warnings: List[str],
+    src: "state_registry.DacSource",
+) -> Dict[str, Any]:
+    """Delaware EJScreen DAC lookup via ArcGIS FeatureServer.
+
+    Queries the DE_EJScreen layer twice:
+      1. Point query at the locate_geom centroid → DACIntersecting.
+      2. Envelope query using the analysis_geom bounding box → DACNearby.
+
+    A census tract is considered a DAC when EXCEED_COUNT_80 > 0.
+    DACNearby is also True whenever DACIntersecting is True.
+    """
+    dac_source = "DE EJScreen EXCEED_COUNT_80>0"
+    out: Dict[str, Any] = {
+        "DACIntersecting": False,
+        "DACNearby": False,
+        "DACSource": dac_source,
+    }
+    lon, lat = _lookup_point(locate_geom)
+
+    # Coordinate-range guard: mirror _dac_socrata to prevent out-of-range queries.
+    if not (-180.0 <= lon <= 180.0) or not (-90.0 <= lat <= 90.0):
+        logger.warning(
+            "DE EJScreen DAC lookup: coordinate out of range lon=%s lat=%s — skipping", lon, lat
+        )
+        warnings.append(
+            f"DE EJScreen DAC lookup: coordinate out of range (lon={lon}, lat={lat}) — skipped."
+        )
+        return {"DACIntersecting": False, "DACNearby": False, "DACSource": dac_source}
+
+    ej_field = src.designation_field or "EXCEED_COUNT_80"
+
+    # ------------------------------------------------------------------
+    # Query 1: point intersect at locate_geom → DACIntersecting
+    # ------------------------------------------------------------------
     data = _json_get(
-        NY_DAC_URL,
+        src.base_url,
+        {
+            "f": "json",
+            "geometry": f"{lon},{lat}",
+            "geometryType": "esriGeometryPoint",
+            "inSR": 4326,
+            "spatialRel": "esriSpatialRelIntersects",
+            "outFields": ej_field,
+            "returnGeometry": "false",
+        },
+        settings,
+        "DE EJScreen",
+        warnings,
+    )
+    features = (data or {}).get("features") or []
+    intersecting = False
+    for feat in features:
+        attrs = feat.get("attributes") or {}
+        field_val = attrs.get(ej_field)
+        try:
+            if int(field_val or 0) > 0:
+                intersecting = True
+                break
+        except (TypeError, ValueError):
+            pass
+    out["DACIntersecting"] = intersecting
+    # DACNearby is at minimum True whenever DACIntersecting is True.
+    out["DACNearby"] = intersecting
+
+    # ------------------------------------------------------------------
+    # Query 2: envelope (bounding box) of analysis_geom → DACNearby
+    # Only run when DACIntersecting is False; fail-soft on any error.
+    # ------------------------------------------------------------------
+    if not intersecting:
+        try:
+            minx, miny, maxx, maxy = analysis_geom.bounds
+            nearby_data = _json_get(
+                src.base_url,
+                {
+                    "f": "json",
+                    "geometry": f"{minx},{miny},{maxx},{maxy}",
+                    "geometryType": "esriGeometryEnvelope",
+                    "inSR": 4326,
+                    "spatialRel": "esriSpatialRelIntersects",
+                    "outFields": ej_field,
+                    "returnGeometry": "false",
+                },
+                settings,
+                "DE EJScreen nearby",
+                warnings,
+            )
+            nearby_features = (nearby_data or {}).get("features") or []
+            for feat in nearby_features:
+                attrs = feat.get("attributes") or {}
+                field_val = attrs.get(ej_field)
+                try:
+                    if int(field_val or 0) > 0:
+                        out["DACNearby"] = True
+                        break
+                except (TypeError, ValueError):
+                    pass
+        except Exception as exc:
+            warnings.append(f"DE EJScreen nearby DAC lookup failed: {exc}")
+            logger.warning("DE EJScreen nearby DAC lookup failed: %s", exc)
+            # Leave DACNearby = DACIntersecting (already set above).
+
+    return out
+
+
+def _query_dac(
+    where: str,
+    url: str,
+    settings: Settings,
+    warnings: List[str],
+) -> List[Dict[str, Any]]:
+    data = _json_get(
+        url,
         {
             "$limit": 3,
             "$select": "geoid,dac_designation,county,city_town",

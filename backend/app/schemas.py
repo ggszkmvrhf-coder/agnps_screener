@@ -72,6 +72,8 @@ class AutoFactsResponse(BaseModel):
     WIPWLSummary: Optional[str] = None
     DACIntersecting: bool = False
     DACNearby: bool = False
+    DACSource: Optional[str] = None
+    StateAuto: Optional[str] = None
     DominantSoilDrainageClass: Optional[str] = None
     DominantHydrologicSoilGroup: Optional[str] = None
     MeanSlopePercent: Optional[float] = None

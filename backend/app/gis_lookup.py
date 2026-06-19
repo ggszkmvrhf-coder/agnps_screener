@@ -60,6 +60,8 @@ def default_facts() -> Dict[str, Any]:
         "WIPWLSummary": None,
         "DACIntersecting": False,
         "DACNearby": False,
+        "DACSource": None,
+        "StateAuto": None,
         "DominantSoilDrainageClass": None,
         "DominantHydrologicSoilGroup": None,
         "MeanSlopePercent": None,
