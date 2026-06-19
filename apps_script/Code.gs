@@ -14,6 +14,10 @@
  *   3. Run setUpTrigger() once (5-min trigger) or use the AgNPS menu.
  */
 
+// SECURITY-FIX-10: Endpoint that mints short-lived per-lead draw tokens.
+// BACKEND_URL is read from Script Properties at runtime (not stored here).
+// Build the full URL dynamically in functions that need it (see ensureDrawUrls_).
+
 const CONFIG = {
   sheets: {
     leads: 'Leads',
@@ -75,9 +79,12 @@ const REQUIRED_HEADERS = {
 
 function setUpTrigger() {
   ScriptApp.getProjectTriggers().forEach(function (t) {
-    if (t.getHandlerFunction() === 'processLeads') ScriptApp.deleteTrigger(t);
+    var fn = t.getHandlerFunction();
+    if (fn === 'processLeads' || fn === 'ensureDrawUrls_') ScriptApp.deleteTrigger(t);
   });
   ScriptApp.newTrigger('processLeads').timeBased().everyMinutes(5).create();
+  // SECURITY-FIX-10: Back-fill BoundaryDrawURL for leads that lack one.
+  ScriptApp.newTrigger('ensureDrawUrls_').timeBased().everyMinutes(10).create();
 }
 
 function onOpen() {
@@ -273,6 +280,88 @@ function upsertCalculation_(ss, leadId, calc) {
     EstimatedCompanyGrossMarginDollars: calc.EstimatedCompanyGrossMarginDollars,
     Assumptions: calc.Assumptions, CalculatorWarnings: calc.CalculatorWarnings,
   });
+}
+
+/* -------------- ensureDrawUrls_ — back-fill BoundaryDrawURL -------------- */
+/**
+ * Scans the Leads sheet for rows where BoundaryDrawURL is empty and calls
+ * /generate-draw-token on the backend to mint a short-lived signed URL.
+ * The returned URL is written into the BoundaryDrawURL column.
+ *
+ * OPERATOR NOTE: Before this function will work you must set AGNPS_API_KEY in
+ * the Apps Script project's Script Properties (Project Settings → Script Properties).
+ * Set it to the same value as the API_KEY environment variable on the backend.
+ * The key is NEVER stored in code — only in Script Properties.
+ *
+ * Runs every 10 minutes via the trigger created by setUpTrigger().
+ */
+function ensureDrawUrls_() {
+  var lock = LockService.getScriptLock();
+  if (!lock.tryLock(10000)) return;
+  try {
+    var props = PropertiesService.getScriptProperties();
+    var backendUrl = props.getProperty('BACKEND_URL');
+    if (!backendUrl) {
+      Logger.log('ensureDrawUrls_: BACKEND_URL not set in Script Properties');
+      return;
+    }
+    // AGNPS_API_KEY must be set in Script Properties (Project Settings → Script Properties).
+    // It must match the API_KEY environment variable configured on the backend server.
+    // Never hard-code credentials in source code.
+    var apiKey = props.getProperty('AGNPS_API_KEY');
+    if (!apiKey) {
+      Logger.log('ensureDrawUrls_: AGNPS_API_KEY not set in Script Properties');
+      return;
+    }
+
+    var generateDrawTokenUrl = backendUrl.replace(/\/$/, '') + '/generate-draw-token';
+
+    var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Leads');
+    if (!sheet) return;
+    var data = sheet.getDataRange().getValues();
+    var headers = data[0];
+    var leadIdCol = headers.indexOf('LeadID');
+    var drawUrlCol = headers.indexOf('BoundaryDrawURL');
+    var latCol = headers.indexOf('GPSLatitude');
+    var lngCol = headers.indexOf('GPSLongitude');
+    if (leadIdCol < 0 || drawUrlCol < 0) return;
+
+    for (var i = 1; i < data.length; i++) {
+      var leadId = data[i][leadIdCol];
+      var existingUrl = data[i][drawUrlCol];
+      if (!leadId || existingUrl) continue;  // skip if no LeadID or URL already set
+
+      var lat = latCol >= 0 ? data[i][latCol] : '';
+      var lng = lngCol >= 0 ? data[i][lngCol] : '';
+
+      var payload = JSON.stringify({
+        lead_id: String(leadId),
+        lat: lat !== '' && lat !== null ? lat : null,
+        lng: lng !== '' && lng !== null ? lng : null,
+      });
+      try {
+        var resp = UrlFetchApp.fetch(generateDrawTokenUrl, {
+          method: 'post',
+          contentType: 'application/json',
+          headers: { 'X-API-Key': apiKey },
+          payload: payload,
+          muteHttpExceptions: true,
+        });
+        if (resp.getResponseCode() === 200) {
+          var result = JSON.parse(resp.getContentText());
+          sheet.getRange(i + 1, drawUrlCol + 1).setValue(result.draw_url);
+          Logger.log('ensureDrawUrls_: set BoundaryDrawURL for lead ' + leadId);
+        } else {
+          Logger.log('ensureDrawUrls_: error for lead ' + leadId + ' — ' + resp.getContentText());
+        }
+      } catch (e) {
+        Logger.log('ensureDrawUrls_: exception for lead ' + leadId + ' — ' + e);
+      }
+      Utilities.sleep(500);  // avoid hammering the backend
+    }
+  } finally {
+    lock.releaseLock();
+  }
 }
 
 /* ----------------------------- helpers ----------------------------- */

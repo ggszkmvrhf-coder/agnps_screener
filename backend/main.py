@@ -36,7 +36,8 @@ from app.database import database_reachable, get_engine, table_exists
 from app.schemas import (
     BoundarySaveRequest, BoundarySaveResponse, LeadProcessRequest, LeadProcessResponse,
 )
-from app.settings import get_settings
+from app import draw_tokens
+from app.settings import Settings, get_settings
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("agnps")
@@ -61,7 +62,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=_settings.cors_origins,
     allow_methods=["GET", "POST"],
-    allow_headers=["Content-Type", "X-API-Key"],
+    allow_headers=["Content-Type", "X-API-Key", "X-Draw-Token", "X-Draw-Exp", "X-Lead-ID"],
 )
 
 
@@ -122,6 +123,15 @@ _LAYER_ATTRS = [
 ]
 
 
+_LEAD_ID_RE = __import__("re").compile(r"^[A-Za-z0-9_-]{1,64}$")
+
+
+def _safe_lead_id(value: str) -> str:
+    """Return the lead_id if it matches the safe pattern, else empty string."""
+    v = (value or "").strip()
+    return v if _LEAD_ID_RE.match(v) else ""
+
+
 def require_api_key(
     x_api_key: Optional[str] = Header(default=None, alias="X-API-Key"),
     key: Optional[str] = Query(default=None),
@@ -132,6 +142,40 @@ def require_api_key(
         # SECURITY-FIX-2: Constant-time comparison prevents timing side-channel.
         if not hmac.compare_digest(submitted_key, settings.api_key):
             raise HTTPException(status_code=401, detail="Invalid or missing API key")
+
+
+# SECURITY-FIX-10: /save-boundary accepts master API key OR per-lead draw token.
+async def require_save_auth(
+    request: Request,
+    x_api_key: Optional[str] = Header(default=None, alias="X-API-Key"),
+    key: Optional[str] = Query(default=None),
+    x_draw_token: Optional[str] = Header(default=None, alias="X-Draw-Token"),
+    x_draw_exp: Optional[str] = Header(default=None, alias="X-Draw-Exp"),
+    x_lead_id: Optional[str] = Header(default=None, alias="X-Lead-ID"),
+    settings: Settings = Depends(get_settings),
+) -> None:
+    """
+    Accept either:
+    - Master API key (X-API-Key header or ?key= query param) — existing method
+    - Draw token (X-Draw-Token + X-Draw-Exp + X-Lead-ID headers) — new per-lead method
+    """
+    # Try master API key first (backward compat)
+    if settings.api_key:
+        submitted_key = x_api_key or key or ""
+        if hmac.compare_digest(submitted_key, settings.api_key):
+            return  # Authenticated via master key
+
+    # Try draw token
+    if x_draw_token and x_draw_exp and x_lead_id:
+        try:
+            exp_int = int(x_draw_exp)
+            safe_lid = _safe_lead_id(x_lead_id)
+            if safe_lid and draw_tokens.verify(safe_lid, x_draw_token, exp_int):
+                return  # Authenticated via draw token
+        except (ValueError, TypeError):
+            pass
+
+    raise HTTPException(status_code=401, detail="Invalid or missing API key")
 
 
 # --------------------------------------------------------------- pipeline ---
@@ -255,7 +299,44 @@ def health() -> Dict[str, Any]:
     }
 
 
-@app.post("/save-boundary", response_model=BoundarySaveResponse, dependencies=[Depends(require_api_key)])
+@app.post("/generate-draw-token")
+async def generate_draw_token(
+    body: dict,
+    request: Request,
+    _api_key: None = Depends(require_api_key),
+    settings: Settings = Depends(get_settings),
+) -> Dict[str, Any]:
+    """
+    Generate a short-lived signed draw URL for a specific lead.
+    Called by Apps Script when a lead is created/updated.
+    The returned URL is stored in BoundaryDrawURL in the Sheet.
+    """
+    lead_id = _safe_lead_id(str(body.get("lead_id", "")))
+    if not lead_id:
+        raise HTTPException(status_code=400, detail="Missing or invalid lead_id")
+
+    lat = body.get("lat")
+    lng = body.get("lng")
+
+    token, exp = draw_tokens.generate(lead_id, ttl_days=settings.draw_token_ttl_days)
+
+    # Build the full draw URL with the token (no master API key in URL)
+    base = str(request.base_url).rstrip("/")
+    url = f"{base}/draw_boundary.html?lead_id={lead_id}&token={token}&exp={exp}"
+    if lat is not None:
+        url += f"&lat={lat}"
+    if lng is not None:
+        url += f"&lng={lng}"
+
+    return {
+        "draw_url": url,
+        "lead_id": lead_id,
+        "exp": exp,
+        "ttl_days": settings.draw_token_ttl_days,
+    }
+
+
+@app.post("/save-boundary", response_model=BoundarySaveResponse, dependencies=[Depends(require_save_auth)])
 def save_boundary(req: BoundarySaveRequest) -> Dict[str, Any]:
     return boundary_mod.save_boundary(req.model_dump(), get_settings(), _store)
 

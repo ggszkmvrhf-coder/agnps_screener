@@ -47,6 +47,8 @@ class Settings(BaseSettings):
     api_key: Optional[str] = None
     # AGENT-H1: Separate signing secret for KML share links. Preferred over api_key for signing if set.
     share_link_secret: Optional[str] = None
+    # Days before a generated draw URL token expires (default 7).
+    draw_token_ttl_days: int = 7
 
     # ----------------------------------------------- shareable boundary link ---
     # Public base URL of this backend, used to build absolute boundary share

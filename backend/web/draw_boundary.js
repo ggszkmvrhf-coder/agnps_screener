@@ -22,7 +22,10 @@
   // This means the key appears in browser history, Render logs, and HTTP referrer headers.
   // Changing this mechanism requires updating the AppSheet Draw Boundary URL formula — out of scope here.
   // Operators should rotate API_KEY periodically. SHARE_LINK_SECRET is now separate from this key.
-  var apiKey = param("key");
+  var apiKey = param("key");       // legacy master key (backward compat)
+  // SECURITY-FIX-10: Prefer draw token over master API key if present.
+  var drawToken = param("token");  // new per-lead token
+  var drawExp = param("exp");      // token expiry timestamp
   document.getElementById("lead-id").textContent = leadId || "(missing)";
 
   var hasPoint = !isNaN(lat) && !isNaN(lng);
@@ -344,8 +347,15 @@
     saveBtn.disabled = true;
     showStatus("Saving…", "info");
 
+    // SECURITY-FIX-10: Prefer draw token over master API key if present.
     var headers = { "Content-Type": "application/json" };
-    if (apiKey) headers["X-API-Key"] = apiKey;
+    if (drawToken && drawExp) {
+      headers["X-Draw-Token"] = drawToken;
+      headers["X-Draw-Exp"] = drawExp;
+      headers["X-Lead-ID"] = leadId;
+    } else if (apiKey) {
+      headers["X-API-Key"] = apiKey;
+    }
     var noteGeoJSON = annotationsToGeoJSON();
 
     fetch(backendUrl + "/save-boundary", {
