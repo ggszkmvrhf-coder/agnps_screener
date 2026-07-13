@@ -28,7 +28,7 @@ from .appsheet_client import _appsheet_action, _appsheet_find, _appsheet_respons
 # AGENT-L3: Log messages include lead_id= prefix for traceability.
 logger = logging.getLogger(__name__)
 _lock = threading.Lock()
-_SAFE_LEAD_ID = re.compile(r"^[A-Za-z0-9_-]+$")
+_SAFE_LEAD_ID = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 
 
 def _safe_lead_id(value: Any) -> Optional[str]:
@@ -325,7 +325,6 @@ def _save_boundary_to_postgis(record: Dict[str, Any], settings: Settings) -> boo
                     :notes, ST_Transform(ST_GeomFromText(:wkt, :input_crs), :projected_crs)
                 )
                 ON CONFLICT (boundary_id) DO UPDATE SET
-                    created_at = now(),
                     boundary_source = EXCLUDED.boundary_source,
                     boundary_geojson = EXCLUDED.boundary_geojson,
                     boundary_wkt = EXCLUDED.boundary_wkt,

@@ -32,7 +32,7 @@ def sign(lead_id: str, exp: int, settings: Settings) -> str:
 def build_share_url(lead_id: str, settings: Settings) -> Optional[str]:
     """Return a full signed KML URL valid for share_link_ttl_hours, or None."""
     base = (settings.public_base_url or "").rstrip("/")
-    if not base or not lead_id or not settings.api_key:
+    if not base or not lead_id or not _secret(settings):
         return None
     exp = int(time.time()) + settings.share_link_ttl_hours * 3600
     path_id = quote(str(lead_id), safe="")
@@ -41,7 +41,7 @@ def build_share_url(lead_id: str, settings: Settings) -> Optional[str]:
 
 def verify(lead_id: str, exp: Optional[str], sig: Optional[str], settings: Settings) -> Tuple[bool, str]:
     """Validate a signed link. Returns (ok, reason)."""
-    if not settings.api_key:
+    if not _secret(settings):
         return False, "not-configured"
     if not exp or not sig:
         return False, "missing"

@@ -645,7 +645,7 @@ class TestDacRouting:
     def test_ny_dac_coordinate_range_guard_rejects_out_of_range(self):
         """
         An out-of-range coordinate should cause the socrata path to skip and
-        return an empty dict (no DACIntersecting key) — the injection guard
+        return a default dict with DACSource provenance — the injection guard
         is preserved verbatim in _dac_socrata.
         """
         settings = _make_settings()
@@ -653,8 +653,11 @@ class TestDacRouting:
         bad_point = Point(999.0, 999.0)  # clearly out of valid range
         with patch("app.public_gis._json_get", return_value=[]) as mock_get:
             result = lookup_dac(bad_point, bad_point, settings, warnings, state="NY")
-        # The implementation returns {} for out-of-range coordinates.
-        assert result == {}
+        # The guard fires: no HTTP calls made, result carries DACSource provenance.
+        assert result["DACIntersecting"] is False
+        assert result["DACNearby"] is False
+        assert result["DACSource"] == "NY DAC (data.ny.gov)"
+        assert any("skipped" in w for w in warnings)
         mock_get.assert_not_called()
 
 

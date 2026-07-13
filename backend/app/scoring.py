@@ -6,6 +6,7 @@ explainable to a SWCD reviewer.
 """
 from typing import Any, Dict, List, Tuple
 
+from .geometry_utils import parse_latlong
 from .settings import Settings
 
 REQUIRED_WARNINGS = [
@@ -79,7 +80,7 @@ def _topo_soils(facts: Dict[str, Any], settings: Settings) -> Tuple[int, str]:
 def _documentation(lead: Dict[str, Any], geom_kind: str) -> Tuple[int, List[str]]:
     pts = 0
     notes = []
-    if lead.get("GPSLatitude") is not None or lead.get("ProblemLocation"):
+    if lead.get("GPSLatitude") is not None or parse_latlong(lead.get("ProblemLocation")) is not None:
         pts += 2
         notes.append("GPS point provided (+2)")
     photos = lead.get("Photos") or lead.get("PhotoCount")

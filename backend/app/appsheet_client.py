@@ -16,7 +16,6 @@ logger = logging.getLogger(__name__)
 
 def _appsheet_find(settings: Settings, table: str, selector: str) -> list:
     """Run an AppSheet API 'Find' action and return the matching rows."""
-    import urllib.error
     import urllib.request
 
     host = "api.eu.appsheet.com" if settings.appsheet_region == "eu" else "api.appsheet.com"

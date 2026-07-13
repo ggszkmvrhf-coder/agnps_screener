@@ -107,8 +107,8 @@ def lookup_county_town(engine, wkt: str, settings: Settings, warnings: List[str]
                 rows[0], ["NAME", "COUNTY", "COUNTYNAME", "NAMELSAD", "county", "county_name"]
             )
         else:
-            warnings.append("Location did not fall inside any NY county polygon "
-                            "(verify the point is within New York State).")
+            warnings.append("Location did not fall inside any county polygon "
+                            "(verify the point is within a supported/loaded state).")
     else:
         warnings.append("County layer not loaded.")
 

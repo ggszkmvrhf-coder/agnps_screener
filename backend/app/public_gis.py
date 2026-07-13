@@ -719,13 +719,15 @@ def _dac_socrata(
         logger.warning(
             "DAC lookup: coordinate out of range lon=%s lat=%s — skipping", lon, lat
         )
-        return {}
+        warnings.append("NY DAC lookup skipped: coordinates out of range or unsafe input.")
+        return {"DACIntersecting": False, "DACNearby": False, "DACSource": "NY DAC (data.ny.gov)"}
 
     point_wkt = f"POINT ({lon} {lat})"
 
     if "'" in point_wkt:
         logger.warning("DAC lookup: WKT contains single quote — skipping to prevent injection")
-        return {}
+        warnings.append("NY DAC lookup skipped: coordinates out of range or unsafe input.")
+        return {"DACIntersecting": False, "DACNearby": False, "DACSource": "NY DAC (data.ny.gov)"}
 
     point_rows = _query_dac(
         f"intersects(the_geom, '{point_wkt}')",

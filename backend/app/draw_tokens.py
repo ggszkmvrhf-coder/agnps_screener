@@ -31,12 +31,16 @@ def _sign(lead_id: str, exp: int) -> str:
 
 def generate(lead_id: str, ttl_days: int = _DEFAULT_TTL_DAYS) -> tuple:
     """Return (token, exp) for the given lead_id."""
+    if not _secret():
+        raise RuntimeError("No signing secret configured")
     exp = int(time.time()) + ttl_days * 86400
     return _sign(lead_id, exp), exp
 
 
 def verify(lead_id: str, token: str, exp: int) -> bool:
     """Return True if the token is valid and not expired."""
+    if not _secret():
+        return False
     if not token or not lead_id:
         return False
     if time.time() > exp:

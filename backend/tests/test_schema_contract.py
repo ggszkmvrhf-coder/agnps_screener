@@ -51,6 +51,7 @@ REQUIRED_HEADERS = {
         "TownAuto", "HUC8", "HUC10", "HUC12", "HUC12Name",
         "NearestWaterbodyName", "NearestWaterbodyType", "DistanceToWaterbodyFt",
         "WIPWLNearby", "WIPWLSummary", "DACIntersecting", "DACNearby",
+        "StateAuto", "DACSource",
         "DominantSoilDrainageClass", "DominantHydrologicSoilGroup",
         "MeanSlopePercent", "MaxSlopePercent", "GISConfidence",
         "MissingInfoChecklist", "HumanReviewWarnings", "ProcessingError",

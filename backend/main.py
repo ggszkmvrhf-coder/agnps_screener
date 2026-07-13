@@ -137,11 +137,12 @@ def require_api_key(
     key: Optional[str] = Query(default=None),
 ) -> None:
     settings = get_settings()
-    if settings.api_key:
-        submitted_key = x_api_key or key or ""
-        # SECURITY-FIX-2: Constant-time comparison prevents timing side-channel.
-        if not hmac.compare_digest(submitted_key, settings.api_key):
-            raise HTTPException(status_code=401, detail="Invalid or missing API key")
+    if not settings.api_key:
+        raise HTTPException(status_code=503, detail="Server auth is not configured")
+    submitted_key = x_api_key or key or ""
+    # SECURITY-FIX-2: Constant-time comparison prevents timing side-channel.
+    if not hmac.compare_digest(submitted_key, settings.api_key):
+        raise HTTPException(status_code=401, detail="Invalid or missing API key")
 
 
 # SECURITY-FIX-10: /save-boundary accepts master API key OR per-lead draw token.
@@ -163,6 +164,7 @@ async def require_save_auth(
     if settings.api_key:
         submitted_key = x_api_key or key or ""
         if hmac.compare_digest(submitted_key, settings.api_key):
+            request.state.auth_lead_id = None
             return  # Authenticated via master key
 
     # Try draw token
@@ -171,6 +173,7 @@ async def require_save_auth(
             exp_int = int(x_draw_exp)
             safe_lid = _safe_lead_id(x_lead_id)
             if safe_lid and draw_tokens.verify(safe_lid, x_draw_token, exp_int):
+                request.state.auth_lead_id = safe_lid
                 return  # Authenticated via draw token
         except (ValueError, TypeError):
             pass
@@ -315,8 +318,15 @@ async def generate_draw_token(
     if not lead_id:
         raise HTTPException(status_code=400, detail="Missing or invalid lead_id")
 
-    lat = body.get("lat")
-    lng = body.get("lng")
+    def _coord(v, lo, hi):
+        try:
+            f = float(v)
+            return f if lo <= f <= hi else None
+        except (TypeError, ValueError):
+            return None
+
+    lat = _coord(body.get("lat"), -90, 90)
+    lng = _coord(body.get("lng"), -180, 180)
 
     token, exp = draw_tokens.generate(lead_id, ttl_days=settings.draw_token_ttl_days)
 
@@ -337,7 +347,10 @@ async def generate_draw_token(
 
 
 @app.post("/save-boundary", response_model=BoundarySaveResponse, dependencies=[Depends(require_save_auth)])
-def save_boundary(req: BoundarySaveRequest) -> Dict[str, Any]:
+def save_boundary(req: BoundarySaveRequest, request: Request) -> Dict[str, Any]:
+    auth_lead = getattr(request.state, "auth_lead_id", None)
+    if auth_lead is not None and _safe_lead_id(str(req.LeadID)) != auth_lead:
+        raise HTTPException(status_code=403, detail="Token is not valid for this LeadID")
     return boundary_mod.save_boundary(req.model_dump(), get_settings(), _store)
 
 

@@ -26,7 +26,7 @@ def estimate_project_cost(
 
     if user_cost is not None and float(user_cost) > 0:
         assumptions.append(f"Used user-entered EstimatedProjectCost = ${float(user_cost):,.0f}.")
-        return float(user_cost), assumptions, warnings
+        return round(float(user_cost), 2), assumptions, warnings
 
     key = (problem_type or "unknown").strip().lower()
     base, per_acre = settings.project_cost_table.get(key, settings.project_cost_default)
@@ -94,7 +94,7 @@ def build_calculation(
     )
 
     result: Dict[str, Any] = {
-        "EstimatedProjectCost": round(cost, 2),
+        "EstimatedProjectCost": cost,
         "Assumptions": " ".join(assumptions),
         "CalculatorWarnings": " | ".join(warnings),
     }
