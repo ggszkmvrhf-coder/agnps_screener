@@ -62,6 +62,7 @@ const REQUIRED_HEADERS = {
     'MissingInfoChecklist', 'HumanReviewWarnings', 'ProcessingError',
     'WaterQualityConnectionScore', 'WIPWLScore', 'BMPFitScore',
     'TopoSoilsScore', 'DocumentationScore', 'DACScore', 'ScoreExplanation',
+    'StateAuto', 'DACSource',
   ],
   BMP_Candidates: [
     'BMPCandidateID', 'LeadID', 'BMPName', 'BMPCategory', 'ReasonSuggested',
@@ -80,11 +81,20 @@ const REQUIRED_HEADERS = {
 function setUpTrigger() {
   ScriptApp.getProjectTriggers().forEach(function (t) {
     var fn = t.getHandlerFunction();
-    if (fn === 'processLeads' || fn === 'ensureDrawUrls_') ScriptApp.deleteTrigger(t);
+    if (fn === 'processLeads' || fn === 'ensureDrawUrls_' || fn === 'onSheetChange') ScriptApp.deleteTrigger(t);
   });
   ScriptApp.newTrigger('processLeads').timeBased().everyMinutes(5).create();
   // SECURITY-FIX-10: Back-fill BoundaryDrawURL for leads that lack one.
   ScriptApp.newTrigger('ensureDrawUrls_').timeBased().everyMinutes(5).create();
+  // Near-instant fill when AppSheet adds/edits a row. onChange fires for API
+  // writes like AppSheet's; onEdit does NOT.
+  ScriptApp.newTrigger('onSheetChange').forSpreadsheet(SpreadsheetApp.getActive()).onChange().create();
+}
+
+function onSheetChange(e) {
+  // Fires on structural changes incl. AppSheet API row inserts, so a new lead's
+  // BoundaryDrawURL is filled within seconds instead of waiting for the 5-min trigger.
+  ensureDrawUrls_();
 }
 
 function onOpen() {
@@ -111,7 +121,9 @@ function processLeadsLocked_() {
   const props = PropertiesService.getScriptProperties();
   const backendUrl = props.getProperty('BACKEND_URL');
   if (!backendUrl) { Logger.log('BACKEND_URL not set. Aborting.'); return; }
-  const token = props.getProperty('BACKEND_TOKEN');
+  // Use BACKEND_TOKEN if set, else fall back to AGNPS_API_KEY (the same key
+  // ensureDrawUrls_ uses) so both integrations share one Script Property.
+  const token = props.getProperty('BACKEND_TOKEN') || props.getProperty('AGNPS_API_KEY');
 
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   validateWorkbook_(ss);
@@ -181,16 +193,27 @@ function buildPayload_(row, col, boundaryGeoJSON) {
 }
 
 function callBackend_(backendUrl, token, payload) {
-  const headers = {};
-  if (token) headers['X-API-Key'] = token;
-  const resp = UrlFetchApp.fetch(backendUrl.replace(/\/$/, '') + '/process-lead', {
-    method: 'post', contentType: 'application/json', headers: headers,
+  const url = backendUrl.replace(/\/$/, '') + '/process-lead';
+  const opts = {
+    method: 'post', contentType: 'application/json',
+    headers: token ? { 'X-API-Key': token } : {},
     payload: JSON.stringify(payload), muteHttpExceptions: true,
-  });
-  const code = resp.getResponseCode();
-  const text = resp.getContentText();
-  if (code < 200 || code >= 300) throw new Error('HTTP ' + code + ': ' + text.slice(0, 300));
-  return JSON.parse(text);
+  };
+  // Retry once: Render free-tier cold starts (~30s) can time out the first call.
+  var resp, code = 0, text = 'no response';
+  for (var attempt = 0; attempt < 2; attempt++) {
+    try {
+      resp = UrlFetchApp.fetch(url, opts);
+      code = resp.getResponseCode();
+      text = resp.getContentText();
+      if (code >= 200 && code < 300) return JSON.parse(text);
+      if (code < 500) break;  // 4xx won't improve on retry
+    } catch (e) {
+      text = String(e);  // timeout / cold start — retry
+    }
+    Utilities.sleep(3000);  // give Render a moment to wake
+  }
+  throw new Error('HTTP ' + code + ': ' + String(text).slice(0, 300));
 }
 
 function writeResult_(ss, leadsSheet, rowNumber, col, leadId, result) {
@@ -249,6 +272,7 @@ function upsertAutoFacts_(ss, leadId, af) {
     WIPWLScore: af.WIPWLScore, BMPFitScore: af.BMPFitScore,
     TopoSoilsScore: af.TopoSoilsScore, DocumentationScore: af.DocumentationScore,
     DACScore: af.DACScore, ScoreExplanation: af.ScoreExplanation,
+    StateAuto: af.StateAuto, DACSource: af.DACSource,
   });
 }
 
@@ -292,7 +316,7 @@ function upsertCalculation_(ss, leadId, calc) {
  * Set it to the same value as the API_KEY environment variable on the backend.
  * The key is NEVER stored in code — only in Script Properties.
  *
- * Runs every 10 minutes via the trigger created by setUpTrigger().
+ * Runs every 5 minutes (and on sheet change) via triggers from setUpTrigger().
  */
 // Public wrapper so ensureDrawUrls_ (private, trailing underscore) can be run
 // manually from the Apps Script editor Run dropdown for testing/back-fill.
@@ -345,7 +369,11 @@ function ensureDrawUrls_() {
       if (lat === '' || lat === null || lng === '' || lng === null) {
         var ploc = plocCol >= 0 ? String(data[i][plocCol] || '') : '';
         var m = ploc.match(/(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)/);
-        if (m) { lat = m[1]; lng = m[2]; }
+        // Only accept if it's a real coordinate ("Field 12, Barn 3" must not pass).
+        if (m) {
+          var la = parseFloat(m[1]), lo = parseFloat(m[2]);
+          if (la >= -90 && la <= 90 && lo >= -180 && lo <= 180) { lat = m[1]; lng = m[2]; }
+        }
       }
       var hasLocation = (lat !== '' && lat !== null && lng !== '' && lng !== null);
 
@@ -354,7 +382,13 @@ function ensureDrawUrls_() {
       // (these were built before the ProblemLocation fallback existed).
       var isToken = existingUrl && String(existingUrl).indexOf('token=') !== -1;
       var hasLatParam = existingUrl && String(existingUrl).indexOf('lat=') !== -1;
-      if (isToken && (hasLatParam || !hasLocation)) continue;
+      // Also regenerate a token URL whose token expires within 2 days (keeps links alive).
+      var expSoon = false;
+      if (isToken) {
+        var em = String(existingUrl).match(/[?&]exp=(\d+)/);
+        expSoon = em ? (parseInt(em[1], 10) - Date.now() / 1000 < 2 * 86400) : true;
+      }
+      if (isToken && !expSoon && (hasLatParam || !hasLocation)) continue;
 
       var payload = JSON.stringify({
         lead_id: String(leadId),
